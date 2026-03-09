@@ -35,10 +35,10 @@ VULNERABILITY_TYPES = frozenset({
 
 SEVERITY_LEVELS = frozenset({"LOW", "MEDIUM", "HIGH", "CRITICAL"})
 
-# Semantic edge types that can be created by the LLM
-_ALLOWED_EDGE_TYPES = frozenset({
-    "SIMILAR_PURPOSE", "RELATED_TO", "DEPENDS_ON", "IMPLEMENTS",
-})
+# Non-structural edge types that can be created by the LLM (uppercased for validation)
+_ALLOWED_EDGE_TYPES = frozenset(
+    m.value.upper() for m in EdgeType if not m.is_structural()
+)
 
 # ============================================================
 # Tool definitions (9 tools)
@@ -114,8 +114,11 @@ GRAPHRAG_TOOL_DEFINITIONS = [
     {
         "name": "ga_create_edge",
         "description": (
-            "Create a semantic relationship edge between two functions in the "
-            "knowledge graph. Edge types: SIMILAR_PURPOSE, RELATED_TO, DEPENDS_ON, IMPLEMENTS."
+            "Create a relationship edge between two functions in the knowledge graph. "
+            "Allowed types — Semantic: SIMILAR_PURPOSE, RELATED_TO, DEPENDS_ON, IMPLEMENTS; "
+            "Security: VULNERABLE_VIA, TAINT_FLOWS_TO, CALLS_VULNERABLE, NETWORK_SEND, NETWORK_RECV; "
+            "Community: BELONGS_TO_COMMUNITY, SIBLING. "
+            "Structural types (CONTAINS, CALLS, FLOWS_TO, REFERENCES, INHERITS) are NOT allowed."
         ),
         "schema": {
             "type": "object",
