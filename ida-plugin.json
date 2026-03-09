@@ -1,13 +1,13 @@
 {
   "IDAMetadataDescriptorVersion": 1,
   "plugin": {
-    "name": "idassist",
+    "name": "IDAssist",
     "entryPoint": "idassist_plugin.py",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "AI-powered reverse engineering plugin with LLM analysis, semantic knowledge graphs, RAG search, and SymGraph collaboration",
     "license": "MIT",
     "urls": {
-      "repository": "https://github.com/jtang613/IDAssist"
+      "repository": "https://github.com/symgraph/IDAssist"
     },
     "authors": [
       {
