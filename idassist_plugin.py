@@ -27,7 +27,16 @@ PLUGIN_NAME = "IDAssist"
 PLUGIN_HOTKEY = "Ctrl+Shift+A"
 PLUGIN_COMMENT = "LLM-assisted reverse engineering"
 PLUGIN_HELP = "Opens the IDAssist panel for AI-powered binary analysis"
-PLUGIN_VERSION = "1.0.0"
+def _load_version():
+    import json
+    try:
+        meta_path = os.path.join(_PLUGIN_DIR, "ida-plugin.json")
+        with open(meta_path, "r") as f:
+            return json.load(f)["plugin"]["version"]
+    except Exception:
+        return "0.0.0"
+
+PLUGIN_VERSION = _load_version()
 
 
 # ---------------------------------------------------------------------------
