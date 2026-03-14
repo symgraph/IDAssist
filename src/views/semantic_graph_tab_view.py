@@ -5,12 +5,10 @@ import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, Signal, QPointF
-from PySide6.QtGui import (
+from ..qt_compat import (
+    Qt, Signal, QPointF,
     QFont, QFontDatabase, QTextCursor, QBrush, QColor, QPen,
-    QPainterPath, QPainter, QPolygonF, QMouseEvent
-)
-from PySide6.QtWidgets import (
+    QPainterPath, QPainter, QPolygonF, QMouseEvent,
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTabWidget,
     QGroupBox, QGridLayout, QSplitter, QListWidget, QListWidgetItem, QTableWidget,
     QTableWidgetItem, QComboBox, QTextEdit, QCheckBox, QSpinBox, QGraphicsView,

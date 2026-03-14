@@ -9,7 +9,7 @@ in background with Qt signal/slot communication.
 
 import asyncio
 from typing import List, Dict, Any, Optional
-from PySide6.QtCore import QThread, Signal
+from ..qt_compat import QThread, Signal
 
 from src.services.react.react_orchestrator import ReActOrchestrator
 from src.services.models.react_models import ReActResult, ReActConfig

@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional, Set
 
-from PySide6.QtCore import QThread, Signal
+from ..qt_compat import QThread, Signal
 
 from src.services.analysis_db_service import AnalysisDBService
 from src.services.settings_service import SettingsService

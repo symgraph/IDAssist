@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                              QTextBrowser, QTextEdit, QLineEdit, QTableWidget, QTableWidgetItem,
-                              QSplitter, QPlainTextEdit, QHeaderView, QAbstractItemView, QSizePolicy, QCheckBox,
-                              QApplication)
-from PySide6.QtCore import Signal, Qt, QDateTime
-from PySide6.QtGui import QKeySequence, QFontDatabase
+from ..qt_compat import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+                         QTextBrowser, QTextEdit, QLineEdit, QTableWidget, QTableWidgetItem,
+                         QSplitter, QPlainTextEdit, QHeaderView, QAbstractItemView, QSizePolicy, QCheckBox,
+                         QApplication, Signal, Qt, QDateTime, QKeySequence, QFontDatabase, exec_dialog)
 import markdown
 import re
 
@@ -44,8 +42,7 @@ class MarkdownCopyBrowser(QTextBrowser):
 
     def contextMenuEvent(self, event):
         """Override context menu to replace Copy action with markdown copy"""
-        from PySide6.QtWidgets import QMenu
-        from PySide6.QtGui import QAction
+        from ..qt_compat import QMenu, QAction
 
         menu = self.createStandardContextMenu()
 
@@ -57,7 +54,7 @@ class MarkdownCopyBrowser(QTextBrowser):
                 action.triggered.connect(self._copy_markdown)
                 break
 
-        menu.exec(event.globalPos())
+        exec_dialog(menu, event.globalPos())
         menu.deleteLater()
 
 
@@ -187,9 +184,9 @@ class QueryTabView(QWidget):
         self.query_editor.hide()  # Hidden by default
 
         # ESC key discards edits and returns to view mode
-        from PySide6.QtGui import QShortcut
+        from ..qt_compat import QShortcut
         esc_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self.query_editor)
-        esc_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        esc_shortcut.setContext(Qt.WidgetShortcut)
         esc_shortcut.activated.connect(self.cancel_edit_mode)
 
     def create_history_table(self):
@@ -487,7 +484,7 @@ class QueryTabView(QWidget):
 
             # Defer scroll restoration until after Qt processes the layout change
             # This ensures scrollbar.maximum() reflects the new content size
-            from PySide6.QtCore import QTimer
+            from ..qt_compat import QTimer
             if should_auto_scroll:
                 # User wants to follow new content - scroll to bottom
                 def scroll_to_bottom():

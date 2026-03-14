@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 import asyncio
-from PySide6.QtWidgets import QMessageBox, QInputDialog, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QCheckBox, QSpinBox, QComboBox
-from PySide6.QtCore import QObject, QThread, Signal
+from ..qt_compat import (QMessageBox, QInputDialog, QDialog, QVBoxLayout, QHBoxLayout,
+                         QLabel, QLineEdit, QPushButton, QCheckBox, QSpinBox, QComboBox,
+                         QObject, QThread, Signal, exec_dialog)
 
 from src.ida_compat import log
 
@@ -561,7 +562,7 @@ class ProviderDialog(QDialog):
 
     def on_authenticate_clicked(self):
         """Handle OAuth authentication button click"""
-        from PySide6.QtWidgets import QMessageBox
+        from ..qt_compat import QMessageBox
 
         current_data = self.provider_type_combo.currentData()
         try:
@@ -586,8 +587,7 @@ class ProviderDialog(QDialog):
 
     def _authenticate_anthropic(self):
         """Handle Anthropic OAuth authentication with automatic callback"""
-        from PySide6.QtWidgets import QMessageBox, QProgressDialog
-        from PySide6.QtCore import Qt
+        from ..qt_compat import QMessageBox, QProgressDialog, Qt
 
         try:
             from ..services.llm_providers.oauth_worker import AnthropicOAuthWorker
@@ -636,7 +636,7 @@ class ProviderDialog(QDialog):
 
     def _on_anthropic_auth_complete(self, result: dict):
         """Handle successful Anthropic OAuth authentication"""
-        from PySide6.QtWidgets import QMessageBox
+        from ..qt_compat import QMessageBox
 
         self._oauth_auth_completed = True
 
@@ -654,7 +654,7 @@ class ProviderDialog(QDialog):
 
     def _on_anthropic_auth_failed(self, error: str):
         """Handle failed Anthropic OAuth authentication"""
-        from PySide6.QtWidgets import QMessageBox
+        from ..qt_compat import QMessageBox
 
         self._oauth_auth_completed = True
 
@@ -681,7 +681,7 @@ class ProviderDialog(QDialog):
 
     def _authenticate_anthropic_manual(self):
         """Manual fallback for Anthropic OAuth authentication"""
-        from PySide6.QtWidgets import QMessageBox, QInputDialog
+        from ..qt_compat import QMessageBox, QInputDialog
 
         try:
             from ..services.llm_providers.oauth_utils import (
@@ -754,8 +754,7 @@ class ProviderDialog(QDialog):
 
     def _authenticate_codex(self):
         """Handle OpenAI Codex (ChatGPT) OAuth authentication with automatic callback"""
-        from PySide6.QtWidgets import QMessageBox, QProgressDialog
-        from PySide6.QtCore import Qt
+        from ..qt_compat import QMessageBox, QProgressDialog, Qt
 
         try:
             from ..services.llm_providers.oauth_worker import OpenAIOAuthWorker
@@ -804,7 +803,7 @@ class ProviderDialog(QDialog):
 
     def _on_codex_auth_complete(self, result: dict):
         """Handle successful OpenAI OAuth authentication"""
-        from PySide6.QtWidgets import QMessageBox
+        from ..qt_compat import QMessageBox
 
         self._oauth_auth_completed = True
 
@@ -822,7 +821,7 @@ class ProviderDialog(QDialog):
 
     def _on_codex_auth_failed(self, error: str):
         """Handle failed OpenAI OAuth authentication"""
-        from PySide6.QtWidgets import QMessageBox
+        from ..qt_compat import QMessageBox
 
         self._oauth_auth_completed = True
 
@@ -858,7 +857,7 @@ class ProviderDialog(QDialog):
 
     def _authenticate_codex_manual(self):
         """Manual fallback for OpenAI Codex OAuth authentication"""
-        from PySide6.QtWidgets import QMessageBox, QInputDialog
+        from ..qt_compat import QMessageBox, QInputDialog
 
         try:
             from ..services.llm_providers.oauth_codex_utils import (
@@ -939,8 +938,7 @@ class ProviderDialog(QDialog):
 
     def _authenticate_gemini(self):
         """Handle Google Gemini OAuth authentication with automatic callback"""
-        from PySide6.QtWidgets import QMessageBox, QProgressDialog
-        from PySide6.QtCore import Qt
+        from ..qt_compat import QMessageBox, QProgressDialog, Qt
 
         try:
             from ..services.llm_providers.oauth_worker import GeminiOAuthWorker
@@ -990,7 +988,7 @@ class ProviderDialog(QDialog):
 
     def _on_gemini_auth_complete(self, result: dict):
         """Handle successful Gemini OAuth authentication"""
-        from PySide6.QtWidgets import QMessageBox
+        from ..qt_compat import QMessageBox
 
         self._oauth_auth_completed = True
 
@@ -1011,7 +1009,7 @@ class ProviderDialog(QDialog):
 
     def _on_gemini_auth_failed(self, error: str):
         """Handle failed Gemini OAuth authentication"""
-        from PySide6.QtWidgets import QMessageBox
+        from ..qt_compat import QMessageBox
 
         self._oauth_auth_completed = True
 
@@ -1051,7 +1049,7 @@ class ProviderDialog(QDialog):
 
     def _authenticate_gemini_manual(self):
         """Manual fallback for Gemini OAuth authentication using headless mode"""
-        from PySide6.QtWidgets import QMessageBox, QInputDialog
+        from ..qt_compat import QMessageBox, QInputDialog
         import asyncio
 
         try:
@@ -1323,7 +1321,7 @@ class SettingsController(QObject):
 
     def add_llm_provider(self):
         dialog = ProviderDialog(self.view)
-        if dialog.exec() == QDialog.Accepted:
+        if exec_dialog(dialog) == QDialog.Accepted:
             try:
                 data = dialog.get_provider_data()
                 is_cli_provider = data.get('provider_type') == 'anthropic_cli'
@@ -1361,7 +1359,7 @@ class SettingsController(QObject):
             provider = providers[row]
             dialog = ProviderDialog(self.view, provider)
 
-            if dialog.exec() == QDialog.Accepted:
+            if exec_dialog(dialog) == QDialog.Accepted:
                 data = dialog.get_provider_data()
                 is_cli_provider = data.get('provider_type') == 'anthropic_cli'
                 if not data['name'] or not data['model']:
@@ -1498,7 +1496,7 @@ class SettingsController(QObject):
 
     def add_mcp_provider(self):
         dialog = MCPProviderDialog(self.view)
-        if dialog.exec() == QDialog.Accepted:
+        if exec_dialog(dialog) == QDialog.Accepted:
             try:
                 data = dialog.get_provider_data()
                 if not all([data['name'], data['url']]):
@@ -1526,7 +1524,7 @@ class SettingsController(QObject):
             provider = providers[row]
             dialog = MCPProviderDialog(self.view, provider)
 
-            if dialog.exec() == QDialog.Accepted:
+            if exec_dialog(dialog) == QDialog.Accepted:
                 data = dialog.get_provider_data()
                 if not all([data['name'], data['url']]):
                     self.show_error("Validation Error", "Name and URL are required fields.")

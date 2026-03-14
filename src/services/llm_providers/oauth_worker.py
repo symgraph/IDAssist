@@ -17,11 +17,11 @@ import asyncio
 from typing import Dict, Any, Optional
 
 try:
-    from PySide6.QtCore import QThread, Signal
-    PYSIDE_AVAILABLE = True
+    from ...qt_compat import QThread, Signal
+    QT_AVAILABLE = True
 except ImportError:
-    PYSIDE_AVAILABLE = False
-    # Stub for type hints when PySide6 not available
+    QT_AVAILABLE = False
+    # Stub for type hints when Qt not available
     class QThread:
         pass
     class Signal:
@@ -52,8 +52,8 @@ class OAuthWorkerBase(QThread):
             timeout: Seconds to wait for authentication (default 5 minutes)
             parent: Optional parent QObject
         """
-        if not PYSIDE_AVAILABLE:
-            raise ImportError("PySide6 required for OAuth worker")
+        if not QT_AVAILABLE:
+            raise ImportError("Qt bindings required for OAuth worker")
 
         super().__init__(parent)
         self.timeout = timeout

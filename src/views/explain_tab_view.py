@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                              QPushButton, QTextBrowser, QTextEdit, QLineEdit, QSizePolicy, QCheckBox,
-                              QApplication, QGroupBox, QGridLayout, QSplitter, QFrame)
-from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QKeySequence, QFontDatabase
+from ..qt_compat import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                         QPushButton, QTextBrowser, QTextEdit, QLineEdit, QSizePolicy, QCheckBox,
+                         QApplication, QGroupBox, QGridLayout, QSplitter, QFrame,
+                         Signal, Qt, QKeySequence, QFontDatabase, exec_dialog)
 import markdown
 import re
 
@@ -42,8 +41,7 @@ class MarkdownCopyBrowser(QTextBrowser):
 
     def contextMenuEvent(self, event):
         """Override context menu to replace Copy action with markdown copy"""
-        from PySide6.QtWidgets import QMenu
-        from PySide6.QtGui import QAction
+        from ..qt_compat import QMenu, QAction
 
         menu = self.createStandardContextMenu()
 
@@ -55,7 +53,7 @@ class MarkdownCopyBrowser(QTextBrowser):
                 action.triggered.connect(self._copy_markdown)
                 break
 
-        menu.exec(event.globalPos())
+        exec_dialog(menu, event.globalPos())
         menu.deleteLater()
 
 
@@ -176,9 +174,9 @@ class ExplainTabView(QWidget):
         self.explain_editor.hide()  # Hidden by default
 
         # ESC key discards edits and returns to view mode
-        from PySide6.QtGui import QShortcut
+        from ..qt_compat import QShortcut
         esc_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self.explain_editor)
-        esc_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        esc_shortcut.setContext(Qt.WidgetShortcut)
         esc_shortcut.activated.connect(self.cancel_edit_mode)
 
     def create_line_explanation_panel(self):
@@ -297,7 +295,7 @@ class ExplainTabView(QWidget):
             self.explain_browser.set_markdown_source(self.markdown_content)
 
         # Restore panel sizes — give all remaining space to the active text widget
-        from PySide6.QtCore import QTimer
+        from ..qt_compat import QTimer
         is_edit = self.is_edit_mode
         def _restore_sizes():
             total = sum(self.main_splitter.sizes())
@@ -321,7 +319,7 @@ class ExplainTabView(QWidget):
         self.explain_editor.hide()
         self.explain_browser.show()
         self.edit_save_button.setText("Edit")
-        from PySide6.QtCore import QTimer
+        from ..qt_compat import QTimer
         def _restore_sizes():
             total = sum(self.main_splitter.sizes())
             active_size = total - line_size - security_size
@@ -347,7 +345,7 @@ class ExplainTabView(QWidget):
             self.explain_browser.setHtml(self.markdown_to_html(markdown_text))
 
             # Defer scroll restoration until after Qt processes the layout change
-            from PySide6.QtCore import QTimer
+            from ..qt_compat import QTimer
             if should_auto_scroll:
                 # Auto-scroll to bottom if user was following the explanation
                 QTimer.singleShot(0, self._scroll_to_bottom)

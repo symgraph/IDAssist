@@ -6,15 +6,14 @@ This view provides the UI for querying, pushing, and pulling
 symbols and graph data from SymGraph.
 """
 
-from PySide6.QtWidgets import (
+from ..qt_compat import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QLabel, QGroupBox, QRadioButton,
     QCheckBox, QButtonGroup, QSplitter, QFrame, QSlider,
-    QStackedWidget, QProgressBar, QTabWidget
+    QStackedWidget, QProgressBar, QTabWidget,
+    Signal, Qt, QFont
 )
-from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QFont
 
 from ..services.models.symgraph_models import ConflictAction, ConflictEntry, PushScope
 

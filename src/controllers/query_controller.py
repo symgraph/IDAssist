@@ -2,7 +2,7 @@
 
 from typing import Optional, Dict, Any, List, Callable
 import asyncio
-from PySide6.QtCore import QDateTime, QThread, QTimer, Signal, Qt
+from ..qt_compat import QDateTime, QThread, QTimer, Signal, Qt, utc_timezone
 from src.ida_compat import log
 from src.services.binary_context_service import BinaryContextService, ViewLevel
 from src.services.llm_providers.provider_factory import LLMProviderFactory
@@ -688,11 +688,9 @@ class QueryController:
     def _convert_utc_to_local_display(self, utc_timestamp: str) -> str:
         """Convert UTC timestamp from database to local display format"""
         try:
-            from PySide6.QtCore import QDateTime, QTimeZone
-            
             # Parse the UTC timestamp and explicitly set it as UTC time
             qdt_utc = QDateTime.fromString(utc_timestamp, "yyyy-MM-dd hh:mm:ss")
-            qdt_utc.setTimeZone(QTimeZone.utc())  # This time is in UTC
+            qdt_utc.setTimeZone(utc_timezone())  # This time is in UTC
             
             # Convert to local time zone  
             qdt_local = qdt_utc.toLocalTime()
@@ -706,8 +704,7 @@ class QueryController:
     
     def _add_chat_to_history_direct(self, chat_id: int, description: str, timestamp: str):
         """Add chat to history table directly without triggering signals (for bulk loading)"""
-        from PySide6.QtWidgets import QTableWidgetItem
-        from PySide6.QtCore import Qt
+        from ..qt_compat import QTableWidgetItem
         
         row_count = self.view.history_table.rowCount()
         self.view.history_table.insertRow(row_count)
@@ -1095,7 +1092,7 @@ class QueryController:
             return
 
         # Show confirmation dialog
-        from PySide6.QtWidgets import QMessageBox
+        from ..qt_compat import QMessageBox
         chat_list = "\n".join([f"• {name}" for name in chat_names[:5]])  # Show first 5
         if len(chat_names) > 5:
             chat_list += f"\n• ... and {len(chat_names) - 5} more"

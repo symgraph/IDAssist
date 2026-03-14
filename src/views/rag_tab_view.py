@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                              QTableWidget, QTableWidgetItem, QHeaderView,
-                              QAbstractItemView, QLabel, QLineEdit, QComboBox,
-                              QTextEdit, QSplitter, QGroupBox)
-from PySide6.QtCore import Signal, Qt
+from ..qt_compat import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+                         QTableWidget, QTableWidgetItem, QHeaderView,
+                         QAbstractItemView, QLabel, QLineEdit, QComboBox,
+                         QTextEdit, QSplitter, QGroupBox, Signal, Qt)
 
 
 class RagTabView(QWidget):

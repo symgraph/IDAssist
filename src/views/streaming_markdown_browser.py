@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from PySide6.QtWidgets import QTextBrowser, QAbstractScrollArea, QApplication
-from PySide6.QtGui import QTextCursor, QKeySequence
+from ..qt_compat import (QTextBrowser, QAbstractScrollArea, QApplication,
+                         QTextCursor, QKeySequence, exec_dialog)
 
 from ..services.streaming.render_update import RenderUpdate, UpdateType
 from ..services.streaming.streaming_renderer import MARKDOWN_CSS
@@ -91,7 +91,7 @@ class StreamingMarkdownBrowser(QTextBrowser):
                 action.triggered.disconnect()
                 action.triggered.connect(self._copy_markdown)
                 break
-        menu.exec(event.globalPos())
+        exec_dialog(menu, event.globalPos())
         menu.deleteLater()
 
     # --- Streaming Functionality ---
@@ -116,7 +116,7 @@ class StreamingMarkdownBrowser(QTextBrowser):
             delta_html = html_content[len(self._last_rendered_html):]
             if delta_html:
                 cursor = self.textCursor()
-                cursor.movePosition(QTextCursor.MoveOperation.End)
+                cursor.movePosition(QTextCursor.End)
                 cursor.insertHtml(delta_html)
                 self._force_layout()
         else:
@@ -153,7 +153,7 @@ class StreamingMarkdownBrowser(QTextBrowser):
                 # Append pending via cursor (avoids second setHtml)
                 if update.pending_html:
                     cursor = self.textCursor()
-                    cursor.movePosition(QTextCursor.MoveOperation.End)
+                    cursor.movePosition(QTextCursor.End)
                     cursor.insertHtml(update.pending_html)
                     self._force_layout()
             else:
@@ -163,13 +163,13 @@ class StreamingMarkdownBrowser(QTextBrowser):
                 # Delete existing pending content
                 if self._pending_start < self.document().characterCount():
                     cursor.setPosition(self._pending_start)
-                    cursor.movePosition(QTextCursor.MoveOperation.End,
-                                       QTextCursor.MoveMode.KeepAnchor)
+                    cursor.movePosition(QTextCursor.End,
+                                       QTextCursor.KeepAnchor)
                     cursor.removeSelectedText()
 
                 # Insert new pending content
                 if update.pending_html:
-                    cursor.movePosition(QTextCursor.MoveOperation.End)
+                    cursor.movePosition(QTextCursor.End)
                     cursor.insertHtml(update.pending_html)
 
                 self._force_layout()

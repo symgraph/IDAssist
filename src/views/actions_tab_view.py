@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                              QLineEdit, QTableWidget, QTableWidgetItem, QListWidget,
-                              QListWidgetItem, QCheckBox, QHeaderView, QAbstractItemView,
-                              QSplitter, QSizePolicy)
-from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QColor
+from ..qt_compat import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+                         QLineEdit, QTableWidget, QTableWidgetItem, QListWidget,
+                         QListWidgetItem, QCheckBox, QHeaderView, QAbstractItemView,
+                         QSplitter, QSizePolicy, Signal, Qt, QColor)
 
 
 class ActionsTabView(QWidget):

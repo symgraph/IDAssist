@@ -9,8 +9,7 @@ querying, pushing, and pulling symbols and graph data.
 import asyncio
 import json
 from typing import Dict, List, Optional, Any, Callable
-from PySide6.QtWidgets import QMessageBox
-from PySide6.QtCore import QThread, Signal, QObject
+from ..qt_compat import QMessageBox, QThread, Signal, QObject
 
 from src.services.analysis_db_service import analysis_db_service
 from src.services.graphrag.graph_store import GraphStore

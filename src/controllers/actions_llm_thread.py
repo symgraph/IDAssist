@@ -9,7 +9,7 @@ Follows the same patterns as ExplainLLMThread but specialized for Actions tools.
 
 import asyncio
 from typing import List, Dict, Any
-from PySide6.QtCore import QThread, Signal
+from ..qt_compat import QThread, Signal
 from ..services.models.llm_models import ToolCall, ChatRequest, ChatMessage, MessageRole
 
 from src.ida_compat import log

@@ -3,7 +3,7 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import asyncio
-from PySide6.QtCore import QThread, Signal, QTimer
+from ..qt_compat import QThread, Signal, QTimer
 from src.services.binary_context_service import BinaryContextService, ViewLevel
 from src.services.llm_providers.provider_factory import LLMProviderFactory
 from src.services.settings_service import SettingsService

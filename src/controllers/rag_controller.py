@@ -2,8 +2,7 @@
 
 import os
 from typing import List, Optional
-from PySide6.QtWidgets import QFileDialog, QMessageBox
-from PySide6.QtCore import QThread, Signal
+from ..qt_compat import QFileDialog, QMessageBox, QThread, Signal, exec_dialog
 
 from src.services.rag_service import rag_service
 from src.services.models.rag_models import IngestRequest, SearchRequest, SearchType
@@ -80,7 +79,7 @@ class RAGController:
         ])
         file_dialog.setWindowTitle("Select Documents to Add to RAG Index")
 
-        if file_dialog.exec():
+        if exec_dialog(file_dialog):
             selected_files = file_dialog.selectedFiles()
             if selected_files:
                 self._ingest_documents(selected_files)

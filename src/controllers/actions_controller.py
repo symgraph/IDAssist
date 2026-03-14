@@ -8,7 +8,7 @@ Follows the same patterns as ExplainController and QueryController.
 """
 
 from typing import Optional, Dict, Any, List
-from PySide6.QtCore import QThread, Signal, Qt
+from ..qt_compat import QThread, Signal, Qt
 from src.services.binary_context_service import BinaryContextService, ViewLevel
 from src.services.actions_service import ActionsService
 from src.services.settings_service import SettingsService

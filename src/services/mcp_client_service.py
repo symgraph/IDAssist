@@ -212,7 +212,7 @@ class MCPClientService:
             deadline = time.time() + timeout
             while not future.done() and time.time() < deadline:
                 try:
-                    from PySide6.QtWidgets import QApplication
+                    from ..qt_compat import QApplication
                     app = QApplication.instance()
                     if app:
                         app.processEvents()

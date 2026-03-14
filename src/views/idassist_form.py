@@ -88,7 +88,7 @@ class IDAssistForm(idaapi.PluginForm):
     def OnCreate(self, form):
         """Called by IDA when the form is first created."""
         try:
-            from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
+            from src.qt_compat import QTabWidget, QVBoxLayout, QWidget
 
             # Convert IDA form handle to a PySide6 widget
             parent = self.FormToPyQtWidget(form)

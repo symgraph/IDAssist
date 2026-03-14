@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                              QTableWidget, QTableWidgetItem, QComboBox, QTextEdit,
-                              QLineEdit, QCheckBox, QHeaderView, QAbstractItemView,
-                              QGroupBox, QScrollArea, QFileDialog)
-from PySide6.QtCore import Signal, Qt
+from ..qt_compat import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+                         QTableWidget, QTableWidgetItem, QComboBox, QTextEdit,
+                         QLineEdit, QCheckBox, QHeaderView, QAbstractItemView,
+                         QGroupBox, QScrollArea, QFileDialog, Signal, Qt)
 from ..services.service_registry import get_service_registry
 
 

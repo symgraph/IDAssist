@@ -8,9 +8,8 @@ Provides organized UI for triggering various analysis operations:
 - Individual Operations: Security, Network Flow, Community Detection, Refresh Names
 """
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QPushButton, QLabel,
+from ...qt_compat import (
+    Signal, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QPushButton, QLabel,
     QProgressBar, QFrame, QCheckBox
 )
 
