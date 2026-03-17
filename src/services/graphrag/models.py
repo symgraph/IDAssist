@@ -20,6 +20,9 @@ class NodeType(str, Enum):
     # Primary unit of analysis for most queries
     FUNCTION = "FUNCTION"
 
+    # External/imported function (PLT stub, thunk, or library import)
+    EXTERNAL = "EXTERNAL"
+
     # Community/module of related functions detected via Leiden algorithm
     # Represents subsystems and logical groupings
     MODULE = "MODULE"
@@ -44,7 +47,7 @@ class NodeType(str, Enum):
 
     def get_level(self) -> int:
         """Get the hierarchy level (0 = finest, 2 = coarsest)."""
-        if self == NodeType.FUNCTION:
+        if self in {NodeType.FUNCTION, NodeType.EXTERNAL}:
             return 0
         elif self in {NodeType.MODULE, NodeType.COMMUNITY}:
             return 1

@@ -1126,6 +1126,9 @@ class SymGraphController(QObject):
             else:
                 # Full binary scope
                 local_nodes = graph_store.get_nodes_by_type(binary_hash, "FUNCTION")
+                local_externals = graph_store.get_nodes_by_type(binary_hash, "EXTERNAL")
+                if local_externals:
+                    local_nodes = (local_nodes or []) + local_externals
 
                 if local_nodes:
                     node_id_to_address = {}
@@ -1189,9 +1192,12 @@ class SymGraphController(QObject):
     def _ida_function_to_node_dict(self, func) -> Dict[str, Any]:
         """Convert an IDA function to a minimal graph node dictionary."""
         func_name = ida_funcs.get_func_name(func.start_ea)
+        # Classify external/thunk functions
+        flags = func.flags
+        is_external = bool(flags & (ida_funcs.FUNC_LIB | ida_funcs.FUNC_THUNK))
         return {
             'address': f"0x{func.start_ea:x}",
-            'node_type': 'function',
+            'node_type': 'external' if is_external else 'function',
             'name': func_name,
             'raw_content': None,
             'llm_summary': None,
