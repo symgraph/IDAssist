@@ -549,6 +549,7 @@ class SemanticGraphController:
             "id": node.id,
             "address": node.address or 0,
             "label": label,
+            "node_type": node.get_node_type_str() if hasattr(node, 'get_node_type_str') else "FUNCTION",
             "summary": node.llm_summary or "",
             "has_vuln": bool(node.security_flags),
             "risk_level": node.risk_level or "",

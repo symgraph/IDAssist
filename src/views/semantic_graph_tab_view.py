@@ -533,6 +533,9 @@ class SemanticGraphGraphView(QWidget):
             "vuln_high_text": QColor("#fca5a5"),
             "vuln_medium": QColor("#92400e"),
             "vuln_medium_text": QColor("#fde68a"),
+            "external": QColor("#4b5563"),
+            "external_text": QColor("#e6e6e6"),
+            "stroke_external": QColor("#6b7280"),
             "stroke_default": QColor("#4b5563"),
             "stroke_center": QColor("#3b82f6"),
             "stroke_caller": QColor("#22d3ee"),
@@ -1020,6 +1023,8 @@ class SemanticGraphGraphView(QWidget):
             return self._colors["vuln_high"], self._colors["vuln_high_text"]
         if is_caller:
             return self._colors["caller"], self._colors["caller_text"]
+        if node.get("node_type", "").upper() == "EXTERNAL":
+            return self._colors["external"], self._colors["external_text"]
         return self._colors["node"], self._colors["node_text"]
 
     def _node_stroke(self, node: Dict[str, Any], is_center: bool, is_caller: bool = False) -> QPen:
@@ -1030,6 +1035,8 @@ class SemanticGraphGraphView(QWidget):
             return QPen(self._colors["stroke_vuln"], 1.5)
         if is_caller:
             return QPen(self._colors["stroke_caller"], 1)
+        if node.get("node_type", "").upper() == "EXTERNAL":
+            return QPen(self._colors["stroke_external"], 1)
         return QPen(self._colors["stroke_default"], 1)
 
     def _edge_style(self, edge_type: str):
