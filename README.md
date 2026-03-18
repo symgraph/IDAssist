@@ -179,7 +179,7 @@ Right-click in any Disassembly or Pseudocode view to access:
 
 ## Homepage
 
-[https://github.com/jtang613/IDAssist](https://github.com/jtang613/IDAssist)
+[https://symgraph.ai](https://symgraph.ai)
 
 ## License
 
