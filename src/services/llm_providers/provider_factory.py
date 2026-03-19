@@ -107,16 +107,6 @@ class LLMProviderFactory:
         except ImportError:
             pass  # Anthropic Claude CLI provider not available
 
-        # Anthropic OAuth provider (Claude Pro/Max subscription)
-        try:
-            from .anthropic_oauth_provider import AnthropicOAuthProviderFactory
-            self.register_factory(
-                ProviderType.ANTHROPIC_OAUTH,
-                AnthropicOAuthProviderFactory()
-            )
-        except ImportError:
-            pass  # Anthropic OAuth provider not available
-
         # Anthropic Platform API provider
         try:
             from .anthropic_platform_api_provider import AnthropicPlatformApiProviderFactory

@@ -18,7 +18,7 @@ def migrate_add_oauth_credentials(db_path: str) -> bool:
 
     Table schema:
     - id: Auto-incrementing primary key
-    - provider_name: Unique identifier for the provider (e.g., 'anthropic_oauth')
+    - provider_name: Unique identifier for the provider (e.g., 'openai_oauth')
     - access_token: OAuth access token
     - refresh_token: OAuth refresh token for obtaining new access tokens
     - expires_at: Unix timestamp when access token expires

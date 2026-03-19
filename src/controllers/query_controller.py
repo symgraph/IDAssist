@@ -880,7 +880,7 @@ class QueryController:
                 self._handle_no_llm_provider(query_text)
                 return
             
-            # Note: OAuth providers (anthropic_oauth, openai_oauth) authenticate via the
+            # Note: OAuth providers (openai_oauth, gemini_oauth) authenticate via the
             # Settings > Edit Provider > Authenticate button before use.
             
             # Ensure we have an active chat

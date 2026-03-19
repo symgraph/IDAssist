@@ -372,7 +372,6 @@ class MessageFormatService:
         self._adapters: Dict[ProviderType, MessageFormatAdapter] = {
             # Anthropic providers (alphabetically)
             ProviderType.ANTHROPIC_CLI: AnthropicCLIMessageAdapter(),
-            ProviderType.ANTHROPIC_OAUTH: anthropic_adapter,  # Same API format as Anthropic Platform
             ProviderType.ANTHROPIC_PLATFORM: anthropic_adapter,
             # Gemini providers (alphabetically)
             ProviderType.GEMINI_OAUTH: openai_adapter,  # Storage uses OpenAI format; provider handles Gemini-native conversion

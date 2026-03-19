@@ -24,7 +24,6 @@ class ProviderType(Enum):
 
     # Anthropic providers (alphabetically)
     ANTHROPIC_CLI = "anthropic_cli"           # Claude Code CLI wrapper
-    ANTHROPIC_OAUTH = "anthropic_oauth"       # OAuth (Claude Pro/Max subscription)
     ANTHROPIC_PLATFORM = "anthropic_platform" # Platform API (direct API key)
 
     # Local/Proxy providers (alphabetically)
@@ -50,7 +49,6 @@ class ProviderType(Enum):
         return {
             # Anthropic
             cls.ANTHROPIC_CLI: "Anthropic CLI (Claude Code)",
-            cls.ANTHROPIC_OAUTH: "Anthropic OAuth (Claude Pro/Max)",
             cls.ANTHROPIC_PLATFORM: "Anthropic Platform API",
             # Gemini
             cls.GEMINI_OAUTH: "Gemini OAuth (Gemini CLI)",
@@ -73,7 +71,6 @@ class ProviderType(Enum):
         return {
             # Anthropic
             cls.ANTHROPIC_CLI: "",  # CLI-based, no URL needed
-            cls.ANTHROPIC_OAUTH: "https://api.anthropic.com",
             cls.ANTHROPIC_PLATFORM: "https://api.anthropic.com",
             # Gemini
             cls.GEMINI_OAUTH: "https://cloudcode-pa.googleapis.com",
@@ -97,11 +94,6 @@ class ProviderType(Enum):
             # Anthropic
             cls.ANTHROPIC_CLI: [
                 "sonnet", "opus", "haiku"  # CLI model shortcuts
-            ],
-            cls.ANTHROPIC_OAUTH: [
-                "claude-sonnet-4-20250514",
-                "claude-haiku-4-5-20251001",
-                "claude-opus-4-5-20251101"
             ],
             cls.ANTHROPIC_PLATFORM: [
                 "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
@@ -160,7 +152,6 @@ class ProviderType(Enum):
         """Check if provider type supports function/tool calling"""
         return provider_type in {
             cls.ANTHROPIC_CLI,       # Via CLI --allowedTools flag
-            cls.ANTHROPIC_OAUTH,     # Full tool calling support
             cls.ANTHROPIC_PLATFORM,  # Full tool calling support
             cls.GEMINI_OAUTH,        # Full tool calling support
             cls.GEMINI_PLATFORM,     # Full tool calling support
@@ -178,7 +169,6 @@ class ProviderType(Enum):
         """Check if provider type supports streaming responses"""
         return provider_type in {
             # Note: ANTHROPIC_CLI does NOT support true streaming
-            cls.ANTHROPIC_OAUTH,
             cls.ANTHROPIC_PLATFORM,
             cls.GEMINI_OAUTH,
             cls.GEMINI_PLATFORM,
@@ -205,7 +195,6 @@ class ProviderType(Enum):
     def uses_oauth(cls, provider_type: 'ProviderType') -> bool:
         """Check if provider type uses OAuth authentication"""
         return provider_type in {
-            cls.ANTHROPIC_OAUTH,
             cls.GEMINI_OAUTH,
             cls.OPENAI_OAUTH,
         }

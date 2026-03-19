@@ -9,9 +9,7 @@ to the new rationalized naming convention:
 Old Value              -> New Value
 ---------              -> ---------
 anthropic              -> anthropic_platform
-anthropic_experimental -> anthropic_oauth
 claude_code            -> anthropic_cli
-claude_oauth           -> anthropic_oauth
 openai                 -> openai_platform
 openai_codex           -> openai_oauth
 
@@ -30,9 +28,7 @@ from src.ida_compat import log
 PROVIDER_TYPE_MIGRATION_MAP = {
     # Old Anthropic names
     "anthropic": "anthropic_platform",
-    "anthropic_experimental": "anthropic_oauth",
     "claude_code": "anthropic_cli",
-    "claude_oauth": "anthropic_oauth",
     # Old OpenAI names
     "openai": "openai_platform",
     "openai_codex": "openai_oauth",
