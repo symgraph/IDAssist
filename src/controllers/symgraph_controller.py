@@ -1015,13 +1015,17 @@ class SymGraphController(QObject):
         except Exception:
             pass
 
+        # Classify thunk/library functions as external (same logic as _ida_function_to_node_dict)
+        is_external = bool(func.flags & (ida_funcs.FUNC_LIB | ida_funcs.FUNC_THUNK))
+        symbol_type = 'external' if is_external else 'function'
+
         return {
             'address': f"0x{func.start_ea:x}",
-            'symbol_type': 'function',
+            'symbol_type': symbol_type,
             'name': func_name,
             'data_type': data_type,
             'confidence': 0.5 if is_auto else 0.9,
-            'provenance': self._get_symbol_provenance(is_auto, func.start_ea, 'function')
+            'provenance': self._get_symbol_provenance(is_auto, func.start_ea, symbol_type)
         }
 
     def _is_auto_generated_name(self, name: str) -> bool:
