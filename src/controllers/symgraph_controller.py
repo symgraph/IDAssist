@@ -98,12 +98,19 @@ class PushWorker(QThread):
     push_complete = Signal(object)  # PushResult
     push_error = Signal(str)
 
-    def __init__(self, sha256: str, symbols: List[Dict], graph_data: Optional[Dict] = None,
-                 fingerprints: Optional[List[Dict[str, str]]] = None):
+    def __init__(
+        self,
+        sha256: str,
+        symbols: List[Dict],
+        graph_data: Optional[Dict] = None,
+        visibility: str = "public",
+        fingerprints: Optional[List[Dict[str, str]]] = None
+    ):
         super().__init__()
         self.sha256 = sha256
         self.symbols = symbols
         self.graph_data = graph_data
+        self.visibility = visibility
         self.fingerprints = fingerprints or []  # List of {'type': str, 'value': str}
 
     def run(self):
@@ -112,27 +119,41 @@ class PushWorker(QThread):
             asyncio.set_event_loop(loop)
             try:
                 total_result = PushResult(success=True)
+                target_revision = None
+
+                if self.symbols or self.graph_data:
+                    target_revision = loop.run_until_complete(
+                        symgraph_service.create_binary_revision(
+                            self.sha256,
+                            visibility=self.visibility
+                        )
+                    )
+                    total_result.binary_revision = target_revision
 
                 # Push symbols in chunks if provided
                 if self.symbols:
                     result = loop.run_until_complete(
-                        symgraph_service.push_symbols_chunked(self.sha256, self.symbols)
+                        symgraph_service.push_symbols_chunked(
+                            self.sha256,
+                            self.symbols,
+                            target_revision=target_revision
+                        )
                     )
                     total_result.symbols_pushed = result.symbols_pushed
-                    if not result.success:
-                        total_result.success = False
-                        total_result.error = result.error
+                    total_result.binary_revision = result.binary_revision or total_result.binary_revision
 
                 # Push graph in chunks if provided
                 if self.graph_data and total_result.success:
                     result = loop.run_until_complete(
-                        symgraph_service.import_graph_chunked(self.sha256, self.graph_data)
+                        symgraph_service.import_graph_chunked(
+                            self.sha256,
+                            self.graph_data,
+                            target_revision=target_revision
+                        )
                     )
                     total_result.nodes_pushed = result.nodes_pushed
                     total_result.edges_pushed = result.edges_pushed
-                    if not result.success:
-                        total_result.success = False
-                        total_result.error = result.error
+                    total_result.binary_revision = result.binary_revision or total_result.binary_revision
 
                 # Add fingerprints (for BuildID/PDB GUID matching)
                 if self.fingerprints and total_result.success:
@@ -150,6 +171,15 @@ class PushWorker(QThread):
                 self.push_complete.emit(total_result)
             finally:
                 loop.close()
+        except SymGraphAPIError as e:
+            self.push_complete.emit(
+                PushResult.failure_result(
+                    str(e),
+                    error_code=e.error_code,
+                    requested_visibility=e.details.get('requested_visibility'),
+                    suggested_visibility=e.details.get('suggested_visibility')
+                )
+            )
         except SymGraphAuthError as e:
             self.push_error.emit(f"Authentication required: {e}")
         except SymGraphNetworkError as e:
@@ -558,6 +588,7 @@ class SymGraphController(QObject):
 
         self._graph_export = None
         self._graph_stats = None
+        self._pending_push_request = None
 
         # Connect view signals
         self._connect_signals()
@@ -655,7 +686,7 @@ class SymGraphController(QObject):
         self.view.set_query_status(f"Error: {error_msg}", found=False)
         log.log_error(f"Query error: {error_msg}")
 
-    def handle_push(self, scope: str, push_symbols: bool, push_graph: bool):
+    def handle_push(self, scope: str, push_symbols: bool, push_graph: bool, visibility: str):
         """Handle push request."""
         sha256 = self._get_sha256()
         if not sha256:
@@ -668,7 +699,10 @@ class SymGraphController(QObject):
                 "Add your API key in Settings > SymGraph")
             return
 
-        log.log_info(f"Pushing to SymGraph: scope={scope}, symbols={push_symbols}, graph={push_graph}")
+        log.log_info(
+            f"Pushing to SymGraph: scope={scope}, symbols={push_symbols}, "
+            f"graph={push_graph}, visibility={visibility}"
+        )
         self.view.set_push_status("Pushing...", success=None)
         self.view.set_buttons_enabled(False)
 
@@ -692,9 +726,21 @@ class SymGraphController(QObject):
 
         # Collect fingerprints for matching (BuildID for ELF, PDB GUID for PE)
         fingerprints = self._collect_fingerprints()
+        self._pending_push_request = {
+            'scope': scope,
+            'push_symbols': push_symbols,
+            'push_graph': push_graph,
+            'visibility': visibility
+        }
 
         # Start push worker
-        self.push_worker = PushWorker(sha256, symbols_data, graph_data, fingerprints)
+        self.push_worker = PushWorker(
+            sha256,
+            symbols_data,
+            graph_data,
+            visibility=visibility,
+            fingerprints=fingerprints
+        )
         self.push_worker.push_complete.connect(self._on_push_complete)
         self.push_worker.push_error.connect(self._on_push_error)
         self.push_worker.finished.connect(lambda: self.view.set_buttons_enabled(True))
@@ -714,8 +760,17 @@ class SymGraphController(QObject):
                 msg_parts.append(f"{result.edges_pushed} edges")
 
             msg = "Pushed: " + ", ".join(msg_parts) if msg_parts else "Push complete"
+            if result.binary_revision:
+                msg += f" to v{result.binary_revision}"
             self.view.set_push_status(msg, success=True)
         else:
+            if (
+                result.error_code == "visibility_quota_exceeded"
+                and result.requested_visibility
+                and result.requested_visibility != "public"
+            ):
+                self._handle_visibility_denial(result)
+                return
             self.view.set_push_status(f"Failed: {result.error or 'Unknown error'}", success=False)
 
     def _on_push_error(self, error_msg: str):
@@ -723,6 +778,30 @@ class SymGraphController(QObject):
         self.view.set_buttons_enabled(True)
         self.view.set_push_status(f"Error: {error_msg}", success=False)
         log.log_error(f"Push error: {error_msg}")
+
+    def _handle_visibility_denial(self, result: PushResult):
+        """Offer a retry as public when a private push is denied by tier limits."""
+        self.view.set_buttons_enabled(True)
+
+        suggested_visibility = result.suggested_visibility or "public"
+        message = (
+            f"{result.error or 'This visibility is not available for your account.'}\n\n"
+            f"Retry this push as {suggested_visibility}?"
+        )
+        reply = QMessageBox.question(
+            self.view,
+            "Visibility Not Available",
+            message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply == QMessageBox.Yes and self._pending_push_request:
+            request = dict(self._pending_push_request)
+            request['visibility'] = suggested_visibility
+            self.handle_push(**request)
+            return
+
+        self.view.set_push_status(f"Failed: {result.error or 'Visibility denied'}", success=False)
 
     def handle_pull_preview(self):
         """Handle pull preview request."""

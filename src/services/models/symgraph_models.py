@@ -422,22 +422,45 @@ class PushResult:
     symbols_pushed: int = 0
     nodes_pushed: int = 0
     edges_pushed: int = 0
+    binary_revision: Optional[int] = None
     error: Optional[str] = None
+    error_code: Optional[str] = None
+    requested_visibility: Optional[str] = None
+    suggested_visibility: Optional[str] = None
 
     @classmethod
-    def success_result(cls, symbols: int = 0, nodes: int = 0, edges: int = 0) -> 'PushResult':
+    def success_result(
+        cls,
+        symbols: int = 0,
+        nodes: int = 0,
+        edges: int = 0,
+        binary_revision: Optional[int] = None
+    ) -> 'PushResult':
         """Create a successful push result."""
         return cls(
             success=True,
             symbols_pushed=symbols,
             nodes_pushed=nodes,
-            edges_pushed=edges
+            edges_pushed=edges,
+            binary_revision=binary_revision
         )
 
     @classmethod
-    def failure_result(cls, error: str) -> 'PushResult':
+    def failure_result(
+        cls,
+        error: str,
+        error_code: Optional[str] = None,
+        requested_visibility: Optional[str] = None,
+        suggested_visibility: Optional[str] = None
+    ) -> 'PushResult':
         """Create a failed push result."""
-        return cls(success=False, error=error)
+        return cls(
+            success=False,
+            error=error,
+            error_code=error_code,
+            requested_visibility=requested_visibility,
+            suggested_visibility=suggested_visibility
+        )
 
 
 @dataclass

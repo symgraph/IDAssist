@@ -11,7 +11,7 @@ from ..qt_compat import (
     QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QLabel, QGroupBox, QRadioButton,
     QCheckBox, QButtonGroup, QSplitter, QFrame, QSlider,
-    QStackedWidget, QProgressBar, QTabWidget,
+    QStackedWidget, QProgressBar, QTabWidget, QComboBox,
     Signal, Qt, QFont
 )
 
@@ -23,7 +23,7 @@ class SymGraphTabView(QWidget):
 
     # Signals for controller communication
     query_requested = Signal()
-    push_requested = Signal(str, bool, bool)  # scope, push_symbols, push_graph
+    push_requested = Signal(str, bool, bool, str)  # scope, push_symbols, push_graph, visibility
     pull_preview_requested = Signal()
     apply_selected_requested = Signal(list)  # list of selected addresses
     apply_all_new_requested = Signal()  # Apply all NEW items automatically
@@ -191,6 +191,21 @@ class SymGraphTabView(QWidget):
 
         data_layout.addStretch()
         layout.addLayout(data_layout)
+
+        visibility_layout = QHBoxLayout()
+        visibility_layout.addWidget(QLabel("Visibility:"))
+
+        self.push_visibility_combo = QComboBox()
+        self.push_visibility_combo.addItem("Public", "public")
+        self.push_visibility_combo.addItem("Private", "private")
+        self.push_visibility_combo.setCurrentIndex(0)
+        self.push_visibility_combo.setToolTip(
+            "Public pushes are available to everyone with access to the binary. "
+            "Private pushes may be restricted by your SymGraph tier."
+        )
+        visibility_layout.addWidget(self.push_visibility_combo)
+        visibility_layout.addStretch()
+        layout.addLayout(visibility_layout)
 
         # Push button and status
         push_row = QHBoxLayout()
@@ -1023,12 +1038,13 @@ class SymGraphTabView(QWidget):
         scope = PushScope.FULL_BINARY.value if self.full_binary_radio.isChecked() else PushScope.CURRENT_FUNCTION.value
         push_symbols = self.push_symbols_check.isChecked()
         push_graph = self.push_graph_check.isChecked()
+        visibility = self.push_visibility_combo.currentData() or "public"
 
         if not push_symbols and not push_graph:
             self.set_push_status("Select at least one data type", success=False)
             return
 
-        self.push_requested.emit(scope, push_symbols, push_graph)
+        self.push_requested.emit(scope, push_symbols, push_graph, visibility)
 
     def on_apply_clicked(self):
         """Handle apply selected button click."""

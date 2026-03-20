@@ -9,7 +9,8 @@ following the IDAssist SOA architecture patterns.
 import asyncio
 import re
 import threading
-from typing import Dict, List, Optional, Any
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Any, Tuple
 from urllib.parse import urlparse
 
 try:
@@ -71,9 +72,17 @@ class SymGraphNetworkError(SymGraphServiceError):
 
 class SymGraphAPIError(SymGraphServiceError):
     """API error - server returned an error response."""
-    def __init__(self, message: str, status_code: int = None):
+    def __init__(
+        self,
+        message: str,
+        status_code: int = None,
+        error_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
         super().__init__(message)
         self.status_code = status_code
+        self.error_code = error_code
+        self.details = details or {}
 
 
 class SymGraphService:
@@ -168,6 +177,57 @@ class SymGraphService:
         if self._is_private_network():
             kwargs['verify'] = False
         return kwargs
+
+    def _parse_api_error(self, response) -> Tuple[str, Optional[str], Dict[str, Any]]:
+        """Extract a normalized API error message and metadata from a response."""
+        details: Dict[str, Any] = {}
+        message = response.text.strip() or f"HTTP {response.status_code}"
+
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+
+        if isinstance(payload, dict):
+            details = payload
+            message = payload.get('error') or payload.get('message') or message
+            return message, payload.get('code'), details
+
+        return message, None, details
+
+    def _raise_api_error(self, action: str, response):
+        """Raise a structured SymGraph API error."""
+        message, error_code, details = self._parse_api_error(response)
+        raise SymGraphAPIError(
+            f"Error {action}: {message}",
+            response.status_code,
+            error_code=error_code,
+            details=details
+        )
+
+    def _build_graph_export_payload(self, sha256: str, export_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Wrap local graph data in the GraphExport API payload shape."""
+        metadata = dict(export_data.get('metadata') or {})
+        communities = export_data.get('communities')
+        if communities is None:
+            communities = metadata.get('communities', [])
+        community_members = export_data.get('community_members')
+        if community_members is None:
+            community_members = metadata.get('community_members', [])
+
+        exported_at = metadata.get('exported_at')
+        if not exported_at:
+            exported_at = datetime.now(timezone.utc).isoformat()
+
+        return {
+            'version': export_data.get('version') or export_data.get('export_version') or '1.0',
+            'exported_at': exported_at,
+            'binary': {'sha256': sha256},
+            'nodes': export_data.get('nodes', []),
+            'edges': export_data.get('edges', []),
+            'communities': communities or [],
+            'community_members': community_members or []
+        }
 
     # === Unauthenticated Operations ===
 
@@ -309,7 +369,53 @@ class SymGraphService:
         except httpx.RequestError as e:
             raise SymGraphNetworkError(f"Network error: {str(e)}")
 
-    async def push_symbols_bulk(self, sha256: str, symbols: List[Dict[str, Any]]) -> PushResult:
+    async def create_binary_revision(
+        self,
+        sha256: str,
+        visibility: str = "public",
+        base_version: Optional[int] = None
+    ) -> int:
+        """Create a writable binary revision for a push session."""
+        self._check_httpx()
+        self._check_auth()
+
+        url = f"{self.base_url}/api/v1/binaries/{sha256}/versions"
+        payload: Dict[str, Any] = {'visibility': visibility}
+        if base_version is not None:
+            payload['base_version'] = base_version
+
+        log.log_debug(f"Creating binary revision for {sha256[:16]}... visibility={visibility}")
+
+        try:
+            async with httpx.AsyncClient(**self._client_kwargs(60.0)) as client:
+                response = await client.post(
+                    url,
+                    headers=self._get_headers(authenticated=True),
+                    json=payload
+                )
+
+                if response.status_code in (200, 201):
+                    data = response.json()
+                    revision = data.get('version')
+                    if isinstance(revision, int) and revision > 0:
+                        return revision
+                    raise SymGraphAPIError("Created binary revision response did not include a version")
+                elif response.status_code == 401:
+                    raise SymGraphAuthError("Invalid API key")
+                else:
+                    self._raise_api_error("creating binary revision", response)
+
+        except httpx.TimeoutException:
+            raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
+        except httpx.RequestError as e:
+            raise SymGraphNetworkError(f"Network error: {str(e)}")
+
+    async def push_symbols_bulk(
+        self,
+        sha256: str,
+        symbols: List[Dict[str, Any]],
+        target_revision: Optional[int] = None
+    ) -> PushResult:
         """
         Push symbols to SymGraph in bulk (authenticated).
 
@@ -324,6 +430,9 @@ class SymGraphService:
         self._check_auth()
 
         url = f"{self.base_url}/api/v1/binaries/{sha256}/symbols/bulk"
+        params = {}
+        if target_revision is not None:
+            params['target_revision'] = target_revision
         log.log_debug(f"Pushing {len(symbols)} symbols to: {url}")
 
         try:
@@ -331,27 +440,34 @@ class SymGraphService:
                 response = await client.post(
                     url,
                     headers=self._get_headers(authenticated=True),
+                    params=params,
                     json={'symbols': symbols}
                 )
 
                 if response.status_code in (200, 201):
                     data = response.json()
                     return PushResult.success_result(
-                        symbols=data.get('symbols_created', len(symbols))
+                        symbols=data.get('symbols_created', len(symbols)),
+                        binary_revision=data.get('binary_revision')
                     )
                 elif response.status_code == 401:
                     raise SymGraphAuthError("Invalid API key")
                 else:
-                    error_msg = response.text or f"HTTP {response.status_code}"
-                    raise SymGraphAPIError(f"Error pushing symbols: {error_msg}", response.status_code)
+                    self._raise_api_error("pushing symbols", response)
 
         except httpx.TimeoutException:
             raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
         except httpx.RequestError as e:
             raise SymGraphNetworkError(f"Network error: {str(e)}")
 
-    async def push_symbols_chunked(self, sha256: str, symbols: List[Dict[str, Any]],
-                                    chunk_size: int = 500) -> PushResult:
+    async def push_symbols_chunked(
+        self,
+        sha256: str,
+        symbols: List[Dict[str, Any]],
+        chunk_size: int = 500,
+        target_revision: Optional[int] = None,
+        visibility: str = "public"
+    ) -> PushResult:
         """
         Push symbols in chunks to avoid timeouts on large payloads.
 
@@ -368,18 +484,18 @@ class SymGraphService:
 
         total_pushed = 0
         total = len(symbols)
+        if target_revision is None:
+            target_revision = await self.create_binary_revision(sha256, visibility=visibility)
         log.log_info(f"Pushing {total} symbols in chunks of {chunk_size}")
 
         for i in range(0, total, chunk_size):
             chunk = symbols[i:i + chunk_size]
             log.log_debug(f"Pushing symbol chunk {i // chunk_size + 1} ({len(chunk)} symbols)")
-            result = await self.push_symbols_bulk(sha256, chunk)
-            if not result.success:
-                return result
+            result = await self.push_symbols_bulk(sha256, chunk, target_revision=target_revision)
             total_pushed += result.symbols_pushed
 
         log.log_info(f"Successfully pushed {total_pushed} symbols")
-        return PushResult.success_result(symbols=total_pushed)
+        return PushResult.success_result(symbols=total_pushed, binary_revision=target_revision)
 
     async def export_symbols(self, sha256: str) -> Optional[SymbolExport]:
         """
@@ -453,7 +569,7 @@ class SymGraphService:
                     raise SymGraphAuthError("Invalid API key")
                 else:
                     error_msg = response.text or f"HTTP {response.status_code}"
-                    raise SymGraphAPIError(f"Error importing symbols: {error_msg}", response.status_code)
+                    self._raise_api_error("importing symbols", response)
 
         except httpx.TimeoutException:
             raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
@@ -498,7 +614,12 @@ class SymGraphService:
         except httpx.RequestError as e:
             raise SymGraphNetworkError(f"Network error: {str(e)}")
 
-    async def import_graph(self, sha256: str, export_data: Dict[str, Any]) -> PushResult:
+    async def import_graph(
+        self,
+        sha256: str,
+        export_data: Dict[str, Any],
+        target_revision: Optional[int] = None
+    ) -> PushResult:
         """
         Import graph data to SymGraph (authenticated).
 
@@ -513,6 +634,10 @@ class SymGraphService:
         self._check_auth()
 
         url = f"{self.base_url}/api/v1/binaries/{sha256}/graph/import"
+        params = {}
+        if target_revision is not None:
+            params['target_revision'] = target_revision
+        payload = self._build_graph_export_payload(sha256, export_data)
         log.log_debug(f"Importing graph to: {url}")
 
         try:
@@ -520,28 +645,35 @@ class SymGraphService:
                 response = await client.post(
                     url,
                     headers=self._get_headers(authenticated=True),
-                    json=export_data
+                    params=params,
+                    json=payload
                 )
 
                 if response.status_code in (200, 201):
                     data = response.json()
                     return PushResult.success_result(
-                        nodes=data.get('nodes_imported', 0),
-                        edges=data.get('edges_imported', 0)
+                        nodes=data.get('nodes_imported', data.get('imported_nodes', 0)),
+                        edges=data.get('edges_imported', data.get('imported_edges', 0)),
+                        binary_revision=data.get('binary_revision')
                     )
                 elif response.status_code == 401:
                     raise SymGraphAuthError("Invalid API key")
                 else:
-                    error_msg = response.text or f"HTTP {response.status_code}"
-                    raise SymGraphAPIError(f"Error importing graph: {error_msg}", response.status_code)
+                    self._raise_api_error("importing graph", response)
 
         except httpx.TimeoutException:
             raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
         except httpx.RequestError as e:
             raise SymGraphNetworkError(f"Network error: {str(e)}")
 
-    async def import_graph_chunked(self, sha256: str, export_data: Dict[str, Any],
-                                    chunk_size: int = 500) -> PushResult:
+    async def import_graph_chunked(
+        self,
+        sha256: str,
+        export_data: Dict[str, Any],
+        chunk_size: int = 500,
+        target_revision: Optional[int] = None,
+        visibility: str = "public"
+    ) -> PushResult:
         """
         Import graph data in chunks (nodes first, then edges) to avoid timeouts.
 
@@ -561,6 +693,8 @@ class SymGraphService:
 
         total_nodes_pushed = 0
         total_edges_pushed = 0
+        if target_revision is None:
+            target_revision = await self.create_binary_revision(sha256, visibility=visibility)
 
         log.log_info(f"Pushing {len(nodes)} nodes and {len(edges)} edges in chunks of {chunk_size}")
 
@@ -568,22 +702,30 @@ class SymGraphService:
         for i in range(0, len(nodes), chunk_size):
             chunk = nodes[i:i + chunk_size]
             log.log_debug(f"Pushing node chunk {i // chunk_size + 1} ({len(chunk)} nodes)")
-            result = await self.import_graph(sha256, {'nodes': chunk, 'edges': []})
-            if not result.success:
-                return result
+            result = await self.import_graph(
+                sha256,
+                {'nodes': chunk, 'edges': [], 'version': export_data.get('version') or export_data.get('export_version')},
+                target_revision=target_revision
+            )
             total_nodes_pushed += result.nodes_pushed
 
         # Push edges in chunks
         for i in range(0, len(edges), chunk_size):
             chunk = edges[i:i + chunk_size]
             log.log_debug(f"Pushing edge chunk {i // chunk_size + 1} ({len(chunk)} edges)")
-            result = await self.import_graph(sha256, {'nodes': [], 'edges': chunk})
-            if not result.success:
-                return result
+            result = await self.import_graph(
+                sha256,
+                {'nodes': [], 'edges': chunk, 'version': export_data.get('version') or export_data.get('export_version')},
+                target_revision=target_revision
+            )
             total_edges_pushed += result.edges_pushed
 
         log.log_info(f"Successfully pushed {total_nodes_pushed} nodes, {total_edges_pushed} edges")
-        return PushResult.success_result(nodes=total_nodes_pushed, edges=total_edges_pushed)
+        return PushResult.success_result(
+            nodes=total_nodes_pushed,
+            edges=total_edges_pushed,
+            binary_revision=target_revision
+        )
 
     # === Fingerprint Operations ===
 
