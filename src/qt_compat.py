@@ -24,6 +24,27 @@ except ImportError:
 QT_AVAILABLE = QT_BINDING is not None
 
 
+_STOP_BUTTON_STYLE_PROPERTY = "_idassist_stop_button_base_stylesheet"
+STOP_BUTTON_STYLESHEET = """
+QPushButton {
+    background-color: #ff6b6b;
+    color: white;
+    border: 1px solid #e85a5a;
+    border-radius: 4px;
+}
+QPushButton:hover {
+    background-color: #ff5c5c;
+}
+QPushButton:pressed {
+    background-color: #e85a5a;
+}
+QPushButton:disabled {
+    background-color: #d98c8c;
+    color: #f5f5f5;
+}
+""".strip()
+
+
 def exec_dialog(obj, *args):
     """Cross-binding .exec() wrapper (PyQt5 uses .exec_())."""
     if hasattr(obj, "exec"):
@@ -36,3 +57,44 @@ def utc_timezone():
     if hasattr(QTimeZone, "utc"):
         return QTimeZone.utc()
     return QTimeZone(0)
+
+
+def apply_stop_button_style(button):
+    """Apply a cross-platform stop-state style to a button."""
+    if button is None:
+        return
+
+    base_stylesheet = button.property(_STOP_BUTTON_STYLE_PROPERTY)
+    if base_stylesheet is None:
+        base_stylesheet = button.styleSheet()
+        button.setProperty(_STOP_BUTTON_STYLE_PROPERTY, base_stylesheet)
+
+    if base_stylesheet:
+        button.setStyleSheet(f"{base_stylesheet}\n{STOP_BUTTON_STYLESHEET}")
+    else:
+        button.setStyleSheet(STOP_BUTTON_STYLESHEET)
+
+    style = button.style()
+    if style is not None:
+        style.unpolish(button)
+        style.polish(button)
+    button.update()
+
+
+def clear_stop_button_style(button):
+    """Restore a button's pre-stop stylesheet."""
+    if button is None:
+        return
+
+    base_stylesheet = button.property(_STOP_BUTTON_STYLE_PROPERTY)
+    if base_stylesheet is None:
+        button.setStyleSheet("")
+    else:
+        button.setStyleSheet(base_stylesheet)
+        button.setProperty(_STOP_BUTTON_STYLE_PROPERTY, None)
+
+    style = button.style()
+    if style is not None:
+        style.unpolish(button)
+        style.polish(button)
+    button.update()
