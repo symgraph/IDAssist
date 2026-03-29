@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import re
 from typing import List, Optional
 
 from src.ida_compat import execute_on_main_thread
@@ -14,7 +15,9 @@ except ImportError:
 
 
 class IDAFunctionSignatureGenerator:
-    """Best-effort IDA implementation of Sigga-style byte masking."""
+    """Canonical masked-prefix signature generator shared across plugins."""
+
+    MAX_SIGNATURE_BYTES = 64
 
     def generate(self, func_ea: Optional[int]) -> Optional[str]:
         if not _IN_IDA or func_ea is None:
@@ -38,9 +41,13 @@ class IDAFunctionSignatureGenerator:
                 if not data:
                     continue
                 disasm = idc.generate_disasm_line(item_ea, 0) or ""
-                tokens.extend(self._mask_instruction(disasm, data))
-                if len(tokens) >= 64:
-                    break
+                masked = self._mask_instruction(disasm, data)
+                for token in masked:
+                    tokens.append(token)
+                    if len(tokens) >= self.MAX_SIGNATURE_BYTES:
+                        trimmed = self._trim_trailing_wildcards(tokens)
+                        holder["signature"] = " ".join(trimmed) if trimmed else None
+                        return
 
             trimmed = self._trim_trailing_wildcards(tokens)
             holder["signature"] = " ".join(trimmed) if trimmed else None
@@ -75,7 +82,7 @@ class IDAFunctionSignatureGenerator:
 
     @staticmethod
     def _should_mask_operands(operand_text: str) -> bool:
-        return any(marker in operand_text for marker in (
+        markers = (
             "offset",
             "loc_",
             "sub_",
@@ -85,7 +92,11 @@ class IDAFunctionSignatureGenerator:
             "cs:",
             "ds:",
             "extrn",
-        ))
+            "extern",
+        )
+        if any(marker in operand_text for marker in markers):
+            return True
+        return re.search(r"\b[0-9a-f]+h\b", operand_text) is not None
 
     @staticmethod
     def _trim_trailing_wildcards(tokens: List[str]) -> List[str]:
