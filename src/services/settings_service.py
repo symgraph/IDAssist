@@ -133,11 +133,13 @@ class SettingsService:
                 migrate_provider_type_names
             )
             from .migrations.add_oauth_credentials import migrate_add_oauth_credentials
+            from .migrations.add_bypass_proxy import migrate_add_bypass_proxy
             migrate_add_provider_type(self._db_path)
             migrate_add_reasoning_effort(self._db_path)
             migrate_add_litellm_configs(self._db_path)
             migrate_add_oauth_credentials(self._db_path)
             migrate_provider_type_names(self._db_path)
+            migrate_add_bypass_proxy(self._db_path)
         except Exception as e:
             # Migration failures shouldn't prevent plugin loading
             try:
@@ -337,7 +339,7 @@ class SettingsService:
 
     def add_llm_provider(self, name: str, model: str, url: str, max_tokens: int = 4096,
                         api_key: str = '', disable_tls: bool = False, provider_type: str = 'openai_platform',
-                        reasoning_effort: str = 'none') -> int:
+                        reasoning_effort: str = 'none', bypass_proxy: bool = True) -> int:
         """Add a new LLM provider"""
         model_family = 'unknown'
         is_bedrock = False
@@ -351,9 +353,9 @@ class SettingsService:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO llm_providers
-                    (name, model, url, max_tokens, api_key, disable_tls, provider_type, reasoning_effort, model_family, is_bedrock, litellm_params)
+                    (name, model, url, max_tokens, api_key, disable_tls, provider_type, reasoning_effort, model_family, is_bedrock, litellm_params, bypass_proxy)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (name, model, url, max_tokens, api_key, disable_tls, provider_type, reasoning_effort, model_family, is_bedrock, '{}'))
+                ''', (name, model, url, max_tokens, api_key, disable_tls, provider_type, reasoning_effort, model_family, is_bedrock, '{}', bypass_proxy))
 
                 provider_id = cursor.lastrowid
                 conn.commit()
@@ -374,7 +376,7 @@ class SettingsService:
             try:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, name, model, url, max_tokens, api_key, disable_tls, provider_type, is_active, reasoning_effort
+                    SELECT id, name, model, url, max_tokens, api_key, disable_tls, provider_type, is_active, reasoning_effort, bypass_proxy
                     FROM llm_providers ORDER BY name
                 ''')
 
@@ -390,7 +392,8 @@ class SettingsService:
                         'disable_tls': bool(row[6]),
                         'provider_type': row[7],
                         'is_active': bool(row[8]),
-                        'reasoning_effort': row[9] if len(row) > 9 else 'none'
+                        'reasoning_effort': row[9] if len(row) > 9 else 'none',
+                        'bypass_proxy': bool(row[10]) if len(row) > 10 else True
                     })
 
                 return providers
@@ -402,7 +405,7 @@ class SettingsService:
 
     def update_llm_provider(self, provider_id: int, **kwargs) -> bool:
         """Update an LLM provider"""
-        valid_fields = {'name', 'model', 'url', 'max_tokens', 'api_key', 'disable_tls',
+        valid_fields = {'name', 'model', 'url', 'max_tokens', 'api_key', 'disable_tls', 'bypass_proxy',
                         'provider_type', 'is_active', 'reasoning_effort',
                         'model_family', 'is_bedrock', 'litellm_params'}
         update_fields = {k: v for k, v in kwargs.items() if k in valid_fields}

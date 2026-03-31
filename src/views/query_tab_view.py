@@ -3,8 +3,7 @@
 from ..qt_compat import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                          QTextBrowser, QTextEdit, QLineEdit, QTableWidget, QTableWidgetItem,
                          QSplitter, QPlainTextEdit, QHeaderView, QAbstractItemView, QSizePolicy, QCheckBox,
-                         QApplication, Signal, Qt, QDateTime, QKeySequence, QFontDatabase, exec_dialog,
-                         apply_stop_button_style, clear_stop_button_style)
+                         QApplication, Signal, Qt, QDateTime, QKeySequence, QFontDatabase, exec_dialog)
 
 from .streaming_markdown_browser import StreamingMarkdownBrowser
 from ..services.streaming.render_update import RenderUpdate
@@ -455,13 +454,13 @@ class QueryTabView(QWidget):
         self.query_running = running
         if running:
             self.submit_button.setText("Stop")
-            apply_stop_button_style(self.submit_button)
+            self.submit_button.setStyleSheet("background-color: #ff6b6b; color: white;")
             # Disable edit button during query to prevent conflicts
             self.edit_save_button.setEnabled(False)
             self.edit_save_button.setToolTip("Edit mode disabled during query execution")
         else:
             self.submit_button.setText("Submit")
-            clear_stop_button_style(self.submit_button)
+            self.submit_button.setStyleSheet("")
             # Re-enable edit button
             self.edit_save_button.setEnabled(True)
             self.edit_save_button.setToolTip("Toggle edit mode")

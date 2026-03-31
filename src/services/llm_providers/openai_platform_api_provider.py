@@ -52,7 +52,7 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
         # Initialize OpenAI client
         try:
             # o* models need longer timeouts due to reasoning time
-            timeout = 30.0
+            timeout = 120.0
             if self._is_reasoning_model():
                 timeout = max(timeout, 180.0)  # At least 3 minutes for o* models
                 log.log_info(f"Using extended timeout of {timeout}s for o* model: {self.model}")
@@ -87,11 +87,18 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
                     http_client=http_client
                 )
             else:
+                import httpx
+                # Respect bypass_proxy setting (default True: ignore system proxy)
+                _bypass_proxy = self.config.get('bypass_proxy', True)
+                _http_client = httpx.Client(trust_env=not _bypass_proxy, timeout=timeout)
+                if _bypass_proxy:
+                    log.log_debug("OpenAI: Bypassing system proxy (trust_env=False)")
                 self._client = OpenAI(
                     api_key=api_key,
                     base_url=base_url,
                     timeout=timeout,
-                    max_retries=0  # We handle retries ourselves
+                    max_retries=0,  # We handle retries ourselves
+                    http_client=_http_client
                 )
 
         except Exception as e:
@@ -351,6 +358,11 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
                 completion_kwargs["tools"] = request.tools
 
             # Make streaming API call
+            import json as _json
+            _req_dump = _json.dumps(completion_kwargs, default=str)
+            _req_size = len(_req_dump)
+            log.log_info(f"OpenAI stream request size: {_req_size} bytes, messages: {len(openai_messages)}, keys: {list(completion_kwargs.keys())}")
+            log.log_debug(f"OpenAI stream request body (first 500): {_req_dump[:500]}")
             stream = self._client.chat.completions.create(**completion_kwargs)
 
             accumulated_content = ""
@@ -485,6 +497,14 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
             raise NetworkError(f"OpenAI connection failed: {e}")
         except openai.APIError as e:
             log.log_error(f"OpenAI API error: {e}")
+            # Retry once on 502/503 transient errors
+            if hasattr(e, 'status_code') and e.status_code in (502, 503, 529):
+                log.log_info(f"Transient {e.status_code} error, retrying in 3s...")
+                import asyncio as _asyncio
+                await _asyncio.sleep(3)
+                async for response in self._chat_completion_stream_impl(request, native_message_callback):
+                    yield response
+                return
             raise APIProviderError(f"OpenAI API error: {e}")
         except Exception as e:
             log.log_error(f"Streaming completion failed: {e}")

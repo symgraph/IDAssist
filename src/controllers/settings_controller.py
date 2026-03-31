@@ -336,8 +336,19 @@ class ProviderDialog(QDialog):
 
         # Model
         layout.addWidget(QLabel("Model:"))
+        model_layout = QHBoxLayout()
         self.model_edit = QLineEdit()
-        layout.addWidget(self.model_edit)
+        self.fetch_models_button = QPushButton("Pull")
+        self.fetch_models_button.setFixedWidth(50)
+        self.fetch_models_button.setToolTip("Fetch available models from API")
+        self.fetch_models_button.clicked.connect(self.on_fetch_models_clicked)
+        self.model_combo = QComboBox()
+        self.model_combo.setVisible(False)
+        self.model_combo.currentTextChanged.connect(self._on_model_combo_changed)
+        model_layout.addWidget(self.model_edit)
+        model_layout.addWidget(self.fetch_models_button)
+        layout.addLayout(model_layout)
+        layout.addWidget(self.model_combo)
 
         # URL
         layout.addWidget(QLabel("URL:"))
@@ -381,6 +392,12 @@ class ProviderDialog(QDialog):
         self.disable_tls_check = QCheckBox("Disable TLS Verification")
         layout.addWidget(self.disable_tls_check)
 
+        # Bypass Proxy
+        self.bypass_proxy_check = QCheckBox("Bypass System Proxy")
+        self.bypass_proxy_check.setToolTip("Ignore system proxy settings and connect directly (fixes 502 errors when a global proxy is active)")
+        self.bypass_proxy_check.setChecked(True)  # Default: bypass proxy
+        layout.addWidget(self.bypass_proxy_check)
+
         # Claude Code CLI note
         self.claude_code_note_label = QLabel(
             "Note: Requires `claude` CLI installed and authenticated.\n"
@@ -409,16 +426,23 @@ class ProviderDialog(QDialog):
         self.model_edit.textChanged.connect(self.update_litellm_metadata)
 
         # Buttons
-        button_layout = QHBoxLayout()
         self.ok_button = QPushButton("OK")
         self.cancel_button = QPushButton("Cancel")
+        self.dialog_test_button = QPushButton("Test")
+        self.dialog_test_status = QLabel("")
+        self.dialog_test_status.setWordWrap(True)
 
         self.ok_button.clicked.connect(self.accept)
         self.cancel_button.clicked.connect(self.reject)
+        self.dialog_test_button.clicked.connect(self.on_dialog_test_clicked)
 
-        button_layout.addWidget(self.ok_button)
-        button_layout.addWidget(self.cancel_button)
-        layout.addLayout(button_layout)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        btn_row.addWidget(self.ok_button, 1)
+        btn_row.addWidget(self.cancel_button, 1)
+        btn_row.addWidget(self.dialog_test_button, 1)
+        layout.addLayout(btn_row)
+        layout.addWidget(self.dialog_test_status)
 
         self.setLayout(layout)
 
@@ -437,6 +461,7 @@ class ProviderDialog(QDialog):
             self.max_tokens_spin.setValue(self.provider_data.get('max_tokens', 4096))
             self.key_edit.setText(self.provider_data.get('api_key', ''))
             self.disable_tls_check.setChecked(self.provider_data.get('disable_tls', False))
+            self.bypass_proxy_check.setChecked(self.provider_data.get('bypass_proxy', True))
 
     def get_provider_data(self):
         """Get the provider data from the form"""
@@ -447,8 +472,98 @@ class ProviderDialog(QDialog):
             'url': self.url_edit.text().strip(),
             'max_tokens': self.max_tokens_spin.value(),
             'api_key': self.key_edit.text(),
-            'disable_tls': self.disable_tls_check.isChecked()
+            'disable_tls': self.disable_tls_check.isChecked(),
+            'bypass_proxy': self.bypass_proxy_check.isChecked()
         }
+
+    def _on_model_combo_changed(self, text):
+        """Sync combo selection back to model_edit"""
+        if text:
+            self.model_edit.setText(text)
+
+    def on_dialog_test_clicked(self):
+        """Send a test message to verify the provider connection"""
+        import urllib.request
+        import json
+        url = self.url_edit.text().strip().rstrip('/')
+        api_key = self.key_edit.text().strip()
+        model = self.model_edit.text().strip()
+        disable_tls = self.disable_tls_check.isChecked()
+        if not url or not model:
+            self.dialog_test_status.setText("⚠ Fill URL and Model first")
+            return
+        chat_url = url.rstrip('/') + '/chat/completions'
+        if not '/v1' in chat_url:
+            chat_url = url.rstrip('/') + '/v1/chat/completions'
+        self.dialog_test_button.setEnabled(False)
+        self.dialog_test_status.setText("Testing...")
+        try:
+            body = json.dumps({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 20}).encode()
+            req = urllib.request.Request(chat_url, data=body, method='POST')
+            req.add_header('Content-Type', 'application/json')
+            if api_key:
+                req.add_header('Authorization', f'Bearer {api_key}')
+            if disable_tls:
+                import ssl
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                resp = urllib.request.urlopen(req, timeout=15, context=ctx)
+            else:
+                resp = urllib.request.urlopen(req, timeout=15)
+            data = json.loads(resp.read().decode())
+            content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            self.dialog_test_status.setText(f"✓ OK: {content[:40]}")
+        except Exception as e:
+            self.dialog_test_status.setText(f"✗ {str(e)[:50]}")
+        finally:
+            self.dialog_test_button.setEnabled(True)
+
+    def on_fetch_models_clicked(self):
+        """Fetch model list from the configured API endpoint"""
+        import urllib.request
+        import json
+        url = self.url_edit.text().strip().rstrip('/')
+        api_key = self.key_edit.text().strip()
+        disable_tls = self.disable_tls_check.isChecked()
+        if not url:
+            QMessageBox.warning(self, "拉取失败", "请先填写 URL")
+            return
+        models_url = url.rstrip('/v1').rstrip('/') + '/v1/models'
+        if '/v1' in url:
+            models_url = url.rstrip('/') + '/models'
+        self.fetch_models_button.setText("...")
+        self.fetch_models_button.setEnabled(False)
+        try:
+            req = urllib.request.Request(models_url)
+            if api_key:
+                req.add_header('Authorization', f'Bearer {api_key}')
+            req.add_header('Accept', 'application/json')
+            if disable_tls:
+                import ssl
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+            else:
+                resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read().decode())
+            models = [m['id'] for m in data.get('data', []) if 'id' in m]
+            if not models:
+                QMessageBox.information(self, "拉取结果", "未找到可用模型")
+            else:
+                self.model_combo.clear()
+                for m in models:
+                    self.model_combo.addItem(m)
+                current = self.model_edit.text().strip()
+                if current in models:
+                    self.model_combo.setCurrentText(current)
+                self.model_combo.setVisible(True)
+        except Exception as e:
+            QMessageBox.warning(self, "拉取失败", f"无法获取模型列表：{e}")
+        finally:
+            self.fetch_models_button.setText("Pull")
+            self.fetch_models_button.setEnabled(True)
 
     def on_provider_type_changed(self):
         """Handle provider type selection change"""
@@ -1155,7 +1270,8 @@ class SettingsController(QObject):
 
                 provider_id = self.service.add_llm_provider(
                     data['name'], data['model'], data['url'],
-                    data['max_tokens'], data['api_key'], data['disable_tls'], data['provider_type']
+                    data['max_tokens'], data['api_key'], data['disable_tls'], data['provider_type'],
+                    bypass_proxy=data.get('bypass_proxy', True)
                 )
 
                 providers = self.service.get_llm_providers()
@@ -1209,7 +1325,8 @@ class SettingsController(QObject):
             self.service.add_llm_provider(
                 new_name, provider['model'], provider['url'],
                 provider['max_tokens'], provider['api_key'],
-                provider['disable_tls'], provider.get('provider_type', 'openai_platform')
+                provider['disable_tls'], provider.get('provider_type', 'openai_platform'),
+                bypass_proxy=provider.get('bypass_proxy', True)
             )
             self.load_initial_data()
             self.show_info("Success", f"Duplicated LLM provider as '{new_name}'")
@@ -1441,7 +1558,7 @@ class SettingsController(QObject):
 
     def update_system_prompt(self, prompt_text):
         try:
-            self.service.set_setting('system_prompt', prompt_text, 'system')
+            self.service.save_system_prompt(prompt_text)
         except Exception as e:
             self.show_error("Failed to Update System Prompt", str(e))
 

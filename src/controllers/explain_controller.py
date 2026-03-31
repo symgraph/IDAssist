@@ -601,11 +601,7 @@ class ExplainController:
         binary_info = context["binary_info"]
 
         if include_llm_prompt:
-            explanation = f"""# Function Explanation
-
-Describe the functionality of the decompiled code below. Provide a summary paragraph section followed by an analysis section that details the functionality of the code. The analysis section should be Markdown formatted. Try to identify the function name from the functionality present, or from string constants or log messages if they are present. But only fallback to strings or log messages that are clearly function names for this function. Include any other relavant details such as possible data structures and security issues,
-
-"""
+            explanation = ""
         else:
             explanation = "# Function Explanation\n\n"
 
@@ -1900,7 +1896,17 @@ class LLMQueryThread(QThread):
                 return
 
             # Create chat request
-            messages = [ChatMessage(role=MessageRole.USER, content=self.query)]
+            # Merge system prompt into user message content
+            try:
+                from src.services.settings_service import settings_service as _ss
+                _sys_prompt = _ss.get_system_prompt()
+                if _sys_prompt:
+                    merged_query = _sys_prompt + '\n\n' + self.query
+                else:
+                    merged_query = self.query
+            except Exception:
+                merged_query = self.query
+            messages = [ChatMessage(role=MessageRole.USER, content=merged_query)]
             request = ChatRequest(
                 messages=messages,
                 model=self.provider_config.get('model', ''),

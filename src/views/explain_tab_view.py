@@ -3,8 +3,7 @@
 from ..qt_compat import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                          QPushButton, QTextBrowser, QTextEdit, QLineEdit, QSizePolicy, QCheckBox,
                          QApplication, QGroupBox, QGridLayout, QSplitter, QFrame,
-                         Signal, Qt, QKeySequence, QFontDatabase, exec_dialog,
-                         apply_stop_button_style, clear_stop_button_style)
+                         Signal, Qt, QKeySequence, QFontDatabase, exec_dialog)
 
 from .streaming_markdown_browser import StreamingMarkdownBrowser
 from ..services.streaming.streaming_renderer import MARKDOWN_CSS, render_markdown_to_html
@@ -523,13 +522,13 @@ class ExplainTabView(QWidget):
         self.function_query_running = running
         if running:
             self.explain_function_button.setText("Stop")
-            apply_stop_button_style(self.explain_function_button)
+            self.explain_function_button.setStyleSheet("background-color: #ff6b6b; color: white;")
             # Disable edit button during query to prevent conflicts
             self.edit_save_button.setEnabled(False)
             self.edit_save_button.setToolTip("Edit mode disabled during query execution")
         else:
             self.explain_function_button.setText("Explain Function")
-            clear_stop_button_style(self.explain_function_button)
+            self.explain_function_button.setStyleSheet("")
             # Re-enable edit button if no other query is running
             if not self.line_query_running:
                 self.edit_save_button.setEnabled(True)
@@ -540,13 +539,13 @@ class ExplainTabView(QWidget):
         self.line_query_running = running
         if running:
             self.explain_line_button.setText("Stop")
-            apply_stop_button_style(self.explain_line_button)
+            self.explain_line_button.setStyleSheet("background-color: #ff6b6b; color: white;")
             # Disable edit button during query to prevent conflicts
             self.edit_save_button.setEnabled(False)
             self.edit_save_button.setToolTip("Edit mode disabled during query execution")
         else:
             self.explain_line_button.setText("Explain Line")
-            clear_stop_button_style(self.explain_line_button)
+            self.explain_line_button.setStyleSheet("")
             # Re-enable edit button if no other query is running
             if not self.function_query_running:
                 self.edit_save_button.setEnabled(True)

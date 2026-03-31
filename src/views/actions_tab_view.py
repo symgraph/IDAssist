@@ -3,8 +3,7 @@
 from ..qt_compat import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                          QLineEdit, QTableWidget, QTableWidgetItem, QListWidget,
                          QListWidgetItem, QCheckBox, QHeaderView, QAbstractItemView,
-                         QSplitter, QSizePolicy, Signal, Qt, QColor,
-                         apply_stop_button_style, clear_stop_button_style)
+                         QSplitter, QSizePolicy, Signal, Qt, QColor)
 
 
 class ActionsTabView(QWidget):
@@ -271,12 +270,12 @@ class ActionsTabView(QWidget):
             else:
                 # When analyzing, show stop button
                 self.analyse_function_button.setText("Stop")
-                apply_stop_button_style(self.analyse_function_button)
+                self.analyse_function_button.setStyleSheet("background-color: #ff6b6b; color: white;")
                 self.apply_actions_button.setEnabled(False)
                 self.clear_button.setEnabled(False)
         else:
             self.analyse_function_button.setText("Analyse Function")
-            clear_stop_button_style(self.analyse_function_button)
+            self.analyse_function_button.setStyleSheet("")
             self.analyse_function_button.setEnabled(True)
             self.apply_actions_button.setEnabled(True)
             self.clear_button.setEnabled(True)

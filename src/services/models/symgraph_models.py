@@ -151,7 +151,7 @@ class Symbol:
     def from_dict(cls, data: Dict[str, Any]) -> 'Symbol':
         """Create symbol from API response dictionary."""
         return cls(
-            address=_parse_address(data.get('address')),
+            address=data.get('address', 0),
             symbol_type=data.get('symbol_type', 'function'),
             name=data.get('name'),
             data_type=data.get('data_type'),

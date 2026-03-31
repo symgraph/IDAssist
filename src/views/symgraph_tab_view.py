@@ -590,23 +590,6 @@ class SymGraphTabView(QWidget):
     def _format_version(version: Optional[int]) -> str:
         return f"v{version}" if version else "New"
 
-    @staticmethod
-    def _coerce_address(value: Any) -> int:
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            stripped = value.strip()
-            if not stripped:
-                return 0
-            try:
-                return int(stripped, 0)
-            except ValueError:
-                return 0
-        try:
-            return int(value or 0)
-        except (TypeError, ValueError):
-            return 0
-
     def _set_checkbox_widget(self, table: QTableWidget, row: int, checked: bool):
         checkbox = QCheckBox()
         checkbox.setChecked(checked)
@@ -1042,7 +1025,7 @@ class SymGraphTabView(QWidget):
             self.push_preview_table.insertRow(row)
             self._set_checkbox_widget(self.push_preview_table, row, True)
 
-            address = self._coerce_address(symbol.get("address", 0))
+            address = int(symbol.get("address", 0))
             name = symbol.get("name") or symbol.get("content") or "<unnamed>"
             symbol_type = symbol.get("symbol_type", "function")
             confidence = float(symbol.get("confidence", 0.0))
