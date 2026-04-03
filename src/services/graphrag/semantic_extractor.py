@@ -128,7 +128,10 @@ class SemanticExtractor:
         if not response:
             return False
 
+        from .extraction_prompts import extract_category
+
         node.llm_summary = response.strip()
+        node.category = extract_category(response) or None
         node.confidence = 0.85  # LLM-generated summary confidence
         node.is_stale = False
         node.user_edited = False

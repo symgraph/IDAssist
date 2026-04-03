@@ -50,6 +50,23 @@ class GraphStore:
             return []
 
     @staticmethod
+    def _normalize_semantic_fields(category: Optional[str], security_flags: Optional[List[str]]) -> Tuple[Optional[str], List[str]]:
+        normalized_category = category.strip().lower().replace(" ", "_") if isinstance(category, str) and category.strip() else None
+        filtered_flags: List[str] = []
+        for flag in security_flags or []:
+            if not isinstance(flag, str):
+                continue
+            trimmed = flag.strip()
+            if not trimmed or trimmed == "LLM_FLAGGED":
+                continue
+            if trimmed.startswith("CATEGORY_"):
+                if normalized_category is None:
+                    normalized_category = trimmed[len("CATEGORY_"):].lower()
+                continue
+            filtered_flags.append(trimmed)
+        return normalized_category, filtered_flags
+
+    @staticmethod
     def _now_ms() -> int:
         return int(time.time() * 1000)
 
@@ -61,12 +78,13 @@ class GraphStore:
             f"{qualifier}signature, {qualifier}decompiled_code, {qualifier}disassembly, {qualifier}raw_content, "
             f"{qualifier}llm_summary, {qualifier}confidence, {qualifier}embedding, {qualifier}security_flags, "
             f"{qualifier}network_apis, {qualifier}file_io_apis, {qualifier}ip_addresses, {qualifier}urls, "
-            f"{qualifier}file_paths, {qualifier}domains, {qualifier}registry_keys, {qualifier}risk_level, "
+            f"{qualifier}file_paths, {qualifier}domains, {qualifier}registry_keys, {qualifier}category, {qualifier}risk_level, "
             f"{qualifier}activity_profile, {qualifier}analysis_depth, {qualifier}created_at, {qualifier}updated_at, "
             f"{qualifier}is_stale, {qualifier}user_edited"
         )
 
     def _row_to_node(self, row: Tuple[Any, ...]) -> GraphNode:
+        category, security_flags = self._normalize_semantic_fields(row[20], self._deserialize_list(row[12]))
         return GraphNode(
             id=row[0],
             binary_hash=row[1],
@@ -80,7 +98,7 @@ class GraphStore:
             llm_summary=row[9],
             confidence=row[10] if row[10] is not None else 0.0,
             embedding=row[11],
-            security_flags=self._deserialize_list(row[12]),
+            security_flags=security_flags,
             network_apis=self._deserialize_list(row[13]),
             file_io_apis=self._deserialize_list(row[14]),
             ip_addresses=self._deserialize_list(row[15]),
@@ -88,13 +106,14 @@ class GraphStore:
             file_paths=self._deserialize_list(row[17]),
             domains=self._deserialize_list(row[18]),
             registry_keys=self._deserialize_list(row[19]),
-            risk_level=row[20],
-            activity_profile=row[21],
-            analysis_depth=row[22] if row[22] is not None else 0,
-            created_at=row[23],
-            updated_at=row[24],
-            is_stale=bool(row[25]),
-            user_edited=bool(row[26]),
+            category=category,
+            risk_level=row[21],
+            activity_profile=row[22],
+            analysis_depth=row[23] if row[23] is not None else 0,
+            created_at=row[24],
+            updated_at=row[25],
+            is_stale=bool(row[26]),
+            user_edited=bool(row[27]),
         )
 
     def get_node_by_address(self, binary_hash: str, node_type: str, address: int) -> Optional[GraphNode]:
@@ -151,6 +170,8 @@ class GraphStore:
             existing = self.get_node_by_address(node.binary_hash, node.node_type, node.address)
             node.id = existing.id if existing else str(uuid.uuid4())
 
+        node.category, node.security_flags = self._normalize_semantic_fields(node.category, node.security_flags)
+
         now_ms = self._now_ms()
         security_flags = self._serialize_list(node.security_flags)
         network_apis = self._serialize_list(node.network_apis)
@@ -169,10 +190,10 @@ class GraphStore:
                     INSERT INTO graph_nodes (
                         id, type, address, binary_id, name, signature, decompiled_code, disassembly, raw_content, llm_summary,
                         confidence, embedding, security_flags, network_apis, file_io_apis,
-                        ip_addresses, urls, file_paths, domains, registry_keys, risk_level,
+                        ip_addresses, urls, file_paths, domains, registry_keys, category, risk_level,
                         activity_profile, analysis_depth, created_at, updated_at, is_stale,
                         user_edited
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         -- STRUCTURAL DATA: Always update from fresh extraction
                         type = excluded.type,
@@ -191,6 +212,7 @@ class GraphStore:
                         file_paths = excluded.file_paths,
                         domains = excluded.domains,
                         registry_keys = excluded.registry_keys,
+                        category = excluded.category,
                         risk_level = excluded.risk_level,
                         activity_profile = excluded.activity_profile,
                         updated_at = excluded.updated_at,
@@ -223,6 +245,7 @@ class GraphStore:
                     file_paths,
                     domains,
                     registry_keys,
+                    node.category,
                     node.risk_level,
                     node.activity_profile,
                     node.analysis_depth,
@@ -609,6 +632,8 @@ class GraphStore:
                 # Cache the node ID
                 self._node_cache[cache_key] = node.id
 
+        node.category, node.security_flags = self._normalize_semantic_fields(node.category, node.security_flags)
+
         # Always queue for batch insert/update (even existing nodes need is_stale updated)
         with self._batch_lock:
             self._node_batch.append(node)
@@ -685,6 +710,7 @@ class GraphStore:
                 self._serialize_list(node.file_paths),
                 self._serialize_list(node.domains),
                 self._serialize_list(node.registry_keys),
+                node.category,
                 node.risk_level,
                 node.activity_profile,
                 node.analysis_depth,
@@ -702,10 +728,10 @@ class GraphStore:
                     INSERT INTO graph_nodes (
                         id, type, address, binary_id, name, signature, decompiled_code, disassembly, raw_content, llm_summary,
                         confidence, embedding, security_flags, network_apis, file_io_apis,
-                        ip_addresses, urls, file_paths, domains, registry_keys, risk_level,
+                        ip_addresses, urls, file_paths, domains, registry_keys, category, risk_level,
                         activity_profile, analysis_depth, created_at, updated_at, is_stale,
                         user_edited
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         -- STRUCTURAL DATA: Always update from fresh extraction
                         type = excluded.type,
@@ -724,6 +750,7 @@ class GraphStore:
                         file_paths = excluded.file_paths,
                         domains = excluded.domains,
                         registry_keys = excluded.registry_keys,
+                        category = excluded.category,
                         risk_level = excluded.risk_level,
                         activity_profile = excluded.activity_profile,
                         updated_at = excluded.updated_at,

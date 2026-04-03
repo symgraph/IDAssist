@@ -283,6 +283,8 @@ class GraphNode:
             properties['domains'] = data.get('domains', [])
         if 'registry_keys' in data and 'registry_keys' not in properties:
             properties['registry_keys'] = data.get('registry_keys', [])
+        if 'category' in data and 'category' not in properties:
+            properties['category'] = data.get('category')
         if 'risk_level' in data and 'risk_level' not in properties:
             properties['risk_level'] = data.get('risk_level')
         if 'activity_profile' in data and 'activity_profile' not in properties:
@@ -320,6 +322,8 @@ class GraphNode:
             result['disassembly'] = self.properties.get('disassembly')
         if self.properties.get('decompiled_code') or self.properties.get('raw_content'):
             result['raw_content'] = self.properties.get('decompiled_code') or self.properties.get('raw_content')
+        if self.properties.get('category'):
+            result['category'] = self.properties.get('category')
         if self.properties:
             result['properties'] = self.properties
         return result

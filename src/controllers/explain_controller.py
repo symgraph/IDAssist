@@ -1785,6 +1785,7 @@ Analyze the specific instruction/line of code marked with >>> below. Provide a d
             return
         self.view.update_security_info(
             node.risk_level,
+            node.category,
             node.activity_profile,
             node.security_flags,
             node.network_apis,

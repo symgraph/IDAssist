@@ -214,6 +214,7 @@ class GraphNode:
     file_paths: List[str] = field(default_factory=list)
     domains: List[str] = field(default_factory=list)
     registry_keys: List[str] = field(default_factory=list)
+    category: Optional[str] = None
     activity_profile: Optional[str] = None
     risk_level: Optional[str] = None
     analysis_depth: int = 0

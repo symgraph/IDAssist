@@ -41,7 +41,7 @@ class GraphRAGQueryEngine:
             "has_structure_data": has_structure,
             "summary": summary,
             "security_flags": node.security_flags or [],
-            "category": self._extract_category(node.llm_summary),
+            "category": node.category or self._extract_category(node.llm_summary),
             "confidence": 0.8 if has_semantic else 0.0,
             "callers": callers,
             "callees": callees,

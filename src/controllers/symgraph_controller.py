@@ -593,6 +593,7 @@ class ApplySymbolsWorker(QThread):
                     file_paths=self._coerce_list(props.get("file_paths")),
                     domains=self._coerce_list(props.get("domains")),
                     registry_keys=self._coerce_list(props.get("registry_keys")),
+                    category=props.get("category"),
                     risk_level=props.get("risk_level"),
                     activity_profile=props.get("activity_profile"),
                     analysis_depth=int(props.get("analysis_depth", 0) or 0),
@@ -1672,6 +1673,8 @@ class SymGraphController(QObject):
             result['domains'] = list(node.domains)
         if node.registry_keys:
             result['registry_keys'] = list(node.registry_keys)
+        if node.category:
+            result['category'] = node.category
 
         if node.risk_level:
             result['risk_level'] = node.risk_level

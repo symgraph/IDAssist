@@ -143,6 +143,9 @@ class AnalysisDBService:
             "address": "INTEGER",
             "binary_id": "TEXT",
             "name": "TEXT",
+            "signature": "TEXT",
+            "decompiled_code": "TEXT",
+            "disassembly": "TEXT",
             "raw_content": "TEXT",
             "llm_summary": "TEXT",
             "confidence": "REAL",
@@ -155,6 +158,7 @@ class AnalysisDBService:
             "file_paths": "TEXT",
             "domains": "TEXT",
             "registry_keys": "TEXT",
+            "category": "TEXT",
             "risk_level": "TEXT",
             "activity_profile": "TEXT",
             "analysis_depth": "INTEGER",
@@ -192,6 +196,7 @@ class AnalysisDBService:
         expected_fts = [
             "id",
             "name",
+            "signature",
             "llm_summary",
             "security_flags",
         ]
@@ -209,6 +214,9 @@ class AnalysisDBService:
                 address INTEGER,
                 binary_id TEXT NOT NULL,
                 name TEXT,
+                signature TEXT,
+                decompiled_code TEXT,
+                disassembly TEXT,
                 raw_content TEXT,
                 llm_summary TEXT,
                 confidence REAL DEFAULT 0.0,
@@ -221,6 +229,7 @@ class AnalysisDBService:
                 file_paths TEXT,
                 domains TEXT,
                 registry_keys TEXT,
+                category TEXT,
                 risk_level TEXT,
                 activity_profile TEXT,
                 analysis_depth INTEGER DEFAULT 0,
@@ -306,6 +315,7 @@ class AnalysisDBService:
                 CREATE VIRTUAL TABLE IF NOT EXISTS node_fts USING fts5(
                     id,
                     name,
+                    signature,
                     llm_summary,
                     security_flags,
                     content='graph_nodes',
@@ -315,22 +325,22 @@ class AnalysisDBService:
             self._drop_graph_nodes_triggers(cursor)
             cursor.execute('''
                 CREATE TRIGGER IF NOT EXISTS graph_nodes_ai AFTER INSERT ON graph_nodes BEGIN
-                    INSERT INTO node_fts(rowid, id, name, llm_summary, security_flags)
-                    VALUES (new.rowid, new.id, new.name, new.llm_summary, new.security_flags);
+                    INSERT INTO node_fts(rowid, id, name, signature, llm_summary, security_flags)
+                    VALUES (new.rowid, new.id, new.name, new.signature, new.llm_summary, new.security_flags);
                 END;
             ''')
             cursor.execute('''
                 CREATE TRIGGER IF NOT EXISTS graph_nodes_ad AFTER DELETE ON graph_nodes BEGIN
-                    INSERT INTO node_fts(node_fts, rowid, id, name, llm_summary, security_flags)
-                    VALUES ('delete', old.rowid, old.id, old.name, old.llm_summary, old.security_flags);
+                    INSERT INTO node_fts(node_fts, rowid, id, name, signature, llm_summary, security_flags)
+                    VALUES ('delete', old.rowid, old.id, old.name, old.signature, old.llm_summary, old.security_flags);
                 END;
             ''')
             cursor.execute('''
                 CREATE TRIGGER IF NOT EXISTS graph_nodes_au AFTER UPDATE ON graph_nodes BEGIN
-                    INSERT INTO node_fts(node_fts, rowid, id, name, llm_summary, security_flags)
-                    VALUES ('delete', old.rowid, old.id, old.name, old.llm_summary, old.security_flags);
-                    INSERT INTO node_fts(rowid, id, name, llm_summary, security_flags)
-                    VALUES (new.rowid, new.id, new.name, new.llm_summary, new.security_flags);
+                    INSERT INTO node_fts(node_fts, rowid, id, name, signature, llm_summary, security_flags)
+                    VALUES ('delete', old.rowid, old.id, old.name, old.signature, old.llm_summary, old.security_flags);
+                    INSERT INTO node_fts(rowid, id, name, signature, llm_summary, security_flags)
+                    VALUES (new.rowid, new.id, new.name, new.signature, new.llm_summary, new.security_flags);
                 END;
             ''')
         except Exception as e:
@@ -447,8 +457,11 @@ class AnalysisDBService:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_line_explanations_lookup ON BNLineExplanations(binary_hash, line_address, view_type)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_line_explanations_function ON BNLineExplanations(binary_hash, function_start)')
 
-                # Note: GraphRAG tables (nodes, edges, communities, FTS) are now created
-                # by database migrations in db_migrations.py (migrations 004-006)
+                # Reconcile GraphRAG tables against the current expected schema even if
+                # the stored schema_version is stale or older plugin runs partially
+                # applied migrations. This prevents runtime read failures on missing
+                # graph columns such as category/risk_level.
+                self._ensure_graphrag_schema(cursor)
 
                 conn.commit()
                 log.log_info("AnalysisDB schema created successfully")
@@ -472,6 +485,14 @@ class AnalysisDBService:
         try:
             from .db_migrations import DatabaseMigrations
             DatabaseMigrations.migrate_analysis_db(self._db_path)
+            with self._db_lock:
+                conn = self._get_connection()
+                try:
+                    cursor = conn.cursor()
+                    self._ensure_graphrag_schema(cursor)
+                    conn.commit()
+                finally:
+                    conn.close()
         except Exception as e:
             log.log_warn(f"Migration failed: {e}")
 

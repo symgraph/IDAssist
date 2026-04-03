@@ -233,6 +233,7 @@ class ExplainTabView(QWidget):
         grid.setVerticalSpacing(2)
 
         self.risk_label = QLabel("Risk: —")
+        self.category_label = QLabel("Category: —")
         self.activity_label = QLabel("Activity: —")
         self.flags_label = QLabel("Flags: None")
         self.flags_label.setWordWrap(True)
@@ -252,17 +253,18 @@ class ExplainTabView(QWidget):
         self.file_text.setLineWrapMode(QTextEdit.NoWrap)
 
         grid.addWidget(self.risk_label, 0, 0)
-        grid.addWidget(self.activity_label, 0, 1)
-        grid.addWidget(self.flags_label, 1, 0, 1, 2)
-        grid.addWidget(self.network_label, 2, 0)
-        grid.addWidget(self.file_label, 2, 1)
-        grid.addWidget(self.network_text, 3, 0)
-        grid.addWidget(self.file_text, 3, 1)
+        grid.addWidget(self.category_label, 0, 1)
+        grid.addWidget(self.activity_label, 1, 0, 1, 2)
+        grid.addWidget(self.flags_label, 2, 0, 1, 2)
+        grid.addWidget(self.network_label, 3, 0)
+        grid.addWidget(self.file_label, 3, 1)
+        grid.addWidget(self.network_text, 4, 0)
+        grid.addWidget(self.file_text, 4, 1)
 
         # Let the API text areas absorb extra vertical space from the splitter
-        for r in range(0, 3):
+        for r in range(0, 4):
             grid.setRowStretch(r, 0)
-        grid.setRowStretch(3, 1)
+        grid.setRowStretch(4, 1)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
 
@@ -356,9 +358,10 @@ class ExplainTabView(QWidget):
         else:
             self.explain_editor.setPlainText(markdown_text)
 
-    def update_security_info(self, risk_level, activity_profile, security_flags, network_apis, file_io_apis):
+    def update_security_info(self, risk_level, category, activity_profile, security_flags, network_apis, file_io_apis):
         """Update the security analysis panel."""
         self.risk_label.setText(f"Risk: {risk_level or '—'}")
+        self.category_label.setText(f"Category: {category or '—'}")
         self.activity_label.setText(f"Activity: {activity_profile or '—'}")
 
         flags_text = ", ".join(security_flags) if security_flags else "None"
@@ -367,12 +370,13 @@ class ExplainTabView(QWidget):
         self.network_text.setPlainText("\n".join(network_apis) if network_apis else "(none detected)")
         self.file_text.setPlainText("\n".join(file_io_apis) if file_io_apis else "(none detected)")
 
-        has_data = bool(risk_level or activity_profile or security_flags or network_apis or file_io_apis)
+        has_data = bool(risk_level or category or activity_profile or security_flags or network_apis or file_io_apis)
         self.security_group.setVisible(has_data)
 
     def clear_security_info(self):
         """Clear and hide the security analysis panel."""
         self.risk_label.setText("Risk: —")
+        self.category_label.setText("Category: —")
         self.activity_label.setText("Activity: —")
         self.flags_label.setText("Flags: None")
         self.network_text.clear()

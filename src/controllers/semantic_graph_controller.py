@@ -481,12 +481,23 @@ class SemanticGraphController:
         results = []
         for edge in edges:
             target_id = edge.target_id if edge.source_id == node_id else edge.source_id
+            target_node = self.graph_store.get_node_by_id(str(target_id))
             results.append({
                 "type": edge.edge_type,
-                "target": str(target_id),
+                "target_id": str(target_id),
+                "target_label": self._format_node_display_name(target_node, str(target_id)),
                 "weight": edge.weight or 1.0,
             })
         return results
+
+    @staticmethod
+    def _format_node_display_name(node, node_id: str) -> str:
+        if node:
+            if node.name:
+                return node.name
+            if node.address is not None:
+                return f"0x{int(node.address):x}"
+        return f"{node_id[:8]}..." if len(node_id) > 8 else node_id
 
     def _collect_graph(self, binary_hash: str, center_id: int, n_hops: int, edge_types: Set[str]):
         max_nodes = 50

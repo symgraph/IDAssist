@@ -432,10 +432,10 @@ class SemanticGraphListView(QWidget):
             row = self.edges_table.rowCount()
             self.edges_table.insertRow(row)
             self.edges_table.setItem(row, 0, QTableWidgetItem(edge["type"]))
-            self.edges_table.setItem(row, 1, QTableWidgetItem(edge["target"]))
+            self.edges_table.setItem(row, 1, QTableWidgetItem(edge["target_label"]))
             self.edges_table.setItem(row, 2, QTableWidgetItem(f"{edge.get('weight', 1.0):.2f}"))
             button = QPushButton("View")
-            button.clicked.connect(lambda _=None, target=edge["target"]: self.edge_clicked.emit(target))
+            button.clicked.connect(lambda _=None, target_id=edge["target_id"]: self.edge_clicked.emit(target_id))
             self.edges_table.setCellWidget(row, 3, button)
 
     def set_security_flags(self, flags: List[str]):
