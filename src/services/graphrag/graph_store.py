@@ -632,6 +632,8 @@ class GraphStore:
                 # Cache the node ID
                 self._node_cache[cache_key] = node.id
 
+        node.category, node.security_flags = self._normalize_semantic_fields(node.category, node.security_flags)
+
         # Always queue for batch insert/update (even existing nodes need is_stale updated)
         with self._batch_lock:
             self._node_batch.append(node)
@@ -708,6 +710,7 @@ class GraphStore:
                 self._serialize_list(node.file_paths),
                 self._serialize_list(node.domains),
                 self._serialize_list(node.registry_keys),
+                node.category,
                 node.risk_level,
                 node.activity_profile,
                 node.analysis_depth,
@@ -725,10 +728,10 @@ class GraphStore:
                     INSERT INTO graph_nodes (
                         id, type, address, binary_id, name, signature, decompiled_code, disassembly, raw_content, llm_summary,
                         confidence, embedding, security_flags, network_apis, file_io_apis,
-                        ip_addresses, urls, file_paths, domains, registry_keys, risk_level,
+                        ip_addresses, urls, file_paths, domains, registry_keys, category, risk_level,
                         activity_profile, analysis_depth, created_at, updated_at, is_stale,
                         user_edited
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         -- STRUCTURAL DATA: Always update from fresh extraction
                         type = excluded.type,
@@ -747,6 +750,7 @@ class GraphStore:
                         file_paths = excluded.file_paths,
                         domains = excluded.domains,
                         registry_keys = excluded.registry_keys,
+                        category = excluded.category,
                         risk_level = excluded.risk_level,
                         activity_profile = excluded.activity_profile,
                         updated_at = excluded.updated_at,
