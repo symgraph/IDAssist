@@ -98,6 +98,34 @@ class QueryWorker(QThread):
             self.query_error.emit(str(e))
 
 
+class UploadWorker(QThread):
+    """Worker thread for uploading raw binaries to SymGraph."""
+
+    upload_complete = Signal(str, object)
+    upload_error = Signal(str, str)
+
+    def __init__(self, expected_sha256: str, filename: str, file_bytes: bytes):
+        super().__init__()
+        self.expected_sha256 = expected_sha256
+        self.filename = filename
+        self.file_bytes = file_bytes
+
+    def run(self):
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(
+                    symgraph_service.upload_binary(self.filename, self.file_bytes)
+                )
+                self.upload_complete.emit(self.expected_sha256, result)
+            finally:
+                loop.close()
+        except Exception as e:
+            log.log_error(f"Upload error: {e}")
+            self.upload_error.emit(self.expected_sha256, str(e))
+
+
 class PushWorker(QThread):
     """Worker thread for pushing to SymGraph."""
 
@@ -112,7 +140,10 @@ class PushWorker(QThread):
         graph_data: Optional[Dict] = None,
         visibility: str = "public",
         fingerprints: Optional[List[Dict[str, str]]] = None,
-        binary_metadata: Optional[Dict[str, Any]] = None
+        binary_metadata: Optional[Dict[str, Any]] = None,
+        upload_filename: Optional[str] = None,
+        upload_bytes: Optional[bytes] = None,
+        ensure_binary_upload: bool = False
     ):
         super().__init__()
         self.sha256 = sha256
@@ -122,6 +153,9 @@ class PushWorker(QThread):
         self.visibility = visibility
         self.fingerprints = fingerprints or []  # List of {'type': str, 'value': str}
         self.binary_metadata = dict(binary_metadata or {})
+        self.upload_filename = upload_filename or "binary.bin"
+        self.upload_bytes = upload_bytes
+        self.ensure_binary_upload = ensure_binary_upload
 
     def run(self):
         try:
@@ -130,6 +164,15 @@ class PushWorker(QThread):
             try:
                 total_result = PushResult(success=True)
                 target_revision = None
+
+                if self.ensure_binary_upload:
+                    if not self.upload_bytes:
+                        raise SymGraphAPIError("Unable to access raw binary bytes for upload")
+                    upload_result = loop.run_until_complete(
+                        symgraph_service.upload_binary(self.upload_filename, self.upload_bytes)
+                    )
+                    if (upload_result.sha256 or "").lower() != self.sha256.lower():
+                        raise SymGraphAPIError("Uploaded binary SHA256 did not match the active binary")
 
                 if self.symbols or self.graph_data:
                     target_revision = loop.run_until_complete(
@@ -685,6 +728,7 @@ class SymGraphController(QObject):
         # Worker threads
         self.query_worker = None
         self.push_worker = None
+        self.upload_worker = None
         self.pull_worker = None
         self.apply_worker = None
         self.document_apply_worker = None
@@ -700,6 +744,7 @@ class SymGraphController(QObject):
         self._pending_apply_documents: List[Dict[str, Any]] = []
         self._pending_apply_summary: Dict[str, int] = {}
         self._last_binary_sha: Optional[str] = None
+        self._last_has_stored_binary: Optional[bool] = None
         self._active_query_sha: Optional[str] = None
 
         # Connect view signals
@@ -712,6 +757,7 @@ class SymGraphController(QObject):
     def _connect_signals(self):
         """Connect view signals to controller methods."""
         self.view.query_requested.connect(self.handle_query)
+        self.view.upload_binary_requested.connect(self.handle_upload_binary)
         self.view.auto_refresh_changed.connect(self._set_auto_refresh_enabled)
         self.view.open_binary_requested.connect(self.handle_open_binary)
         self.view.push_preview_requested.connect(self.handle_push_preview)
@@ -759,6 +805,7 @@ class SymGraphController(QObject):
                 self.view.set_binary_info(name, sha256, local_metadata=local_metadata or None)
                 if sha256 != previous_sha:
                     self._last_binary_sha = sha256
+                    self._last_has_stored_binary = None
                     self.view.hide_stats()
                     self.view.reset_query_status()
                     self.view.set_open_binary_url(None)
@@ -771,6 +818,7 @@ class SymGraphController(QObject):
                 self.view.set_binary_info("<error>", None, local_metadata=None)
         else:
             self._last_binary_sha = None
+            self._last_has_stored_binary = None
             self.view.set_binary_info("<no binary loaded>", None, local_metadata=None)
             self.view.hide_stats()
             self.view.reset_query_status()
@@ -905,6 +953,23 @@ class SymGraphController(QObject):
         """Get SHA256 hash of the original binary."""
         return get_binary_hash() or None
 
+    def _build_binary_upload_payload(self) -> Optional[tuple[str, bytes]]:
+        """Get raw binary bytes and filename for SymGraph upload."""
+        if not _IN_IDA:
+            return None
+
+        input_path = ida_nalt.get_input_file_path() or ""
+        if not input_path or not os.path.exists(input_path):
+            return None
+
+        file_name = self._basename_only(input_path) or "binary.bin"
+        try:
+            with open(input_path, "rb") as f:
+                return file_name, f.read()
+        except OSError as e:
+            log.log_error(f"Error reading raw binary for upload: {e}")
+            return None
+
     def handle_query(self):
         """Handle query request."""
         sha256 = self._get_sha256()
@@ -914,6 +979,7 @@ class SymGraphController(QObject):
 
         log.log_info(f"Querying SymGraph for: {sha256}")
         self.view.set_query_status("Checking...")
+        self.view.set_storage_status(None)
         self.view.hide_stats()
         self.view.set_open_binary_url(None)
         self.view.set_buttons_enabled(False)
@@ -936,12 +1002,16 @@ class SymGraphController(QObject):
             return
 
         if result.error:
+            self._last_has_stored_binary = None
             self.view.set_query_status(f"Error: {result.error}", found=False)
+            self.view.set_storage_status(None)
             self.view.set_open_binary_url(None)
             return
 
         if result.exists:
+            self._last_has_stored_binary = result.has_stored_binary
             self.view.set_query_status("Found in SymGraph", found=True)
+            self.view.set_storage_status(result.has_stored_binary)
             self.view.set_open_binary_url(symgraph_service.get_binary_url(self._get_sha256()))
             if result.stats:
                 self.view.set_stats(
@@ -954,8 +1024,12 @@ class SymGraphController(QObject):
                     latest_revision=result.latest_revision,
                     selected_revision=result.selected_revision
                 )
+            else:
+                self.view.hide_stats()
         else:
+            self._last_has_stored_binary = None
             self.view.set_query_status("Not found in SymGraph", found=False)
+            self.view.set_storage_status(None)
             self.view.set_open_binary_url(None)
             self.view.hide_stats()
 
@@ -963,9 +1037,66 @@ class SymGraphController(QObject):
         """Handle query error."""
         if expected_sha != self._active_query_sha or expected_sha != self._get_sha256():
             return
+        self._last_has_stored_binary = None
         self.view.set_query_status(f"Error: {error_msg}", found=False)
+        self.view.set_storage_status(None)
         self.view.set_open_binary_url(None)
         log.log_error(f"Query error: {error_msg}")
+
+    def handle_upload_binary(self):
+        """Upload the raw binary to SymGraph storage."""
+        sha256 = self._get_sha256()
+        if not sha256:
+            self._show_error("No Binary", "No binary loaded or unable to compute hash.")
+            return
+
+        if not symgraph_service.has_api_key:
+            self._show_error(
+                "API Key Required",
+                "Upload requires a SymGraph API key.\n\nAdd your API key in Settings > SymGraph"
+            )
+            return
+
+        payload = self._build_binary_upload_payload()
+        if payload is None:
+            self._show_error(
+                "Upload Unavailable",
+                "IDAssist can only upload binaries when the original input file path is still accessible."
+            )
+            return
+
+        filename, file_bytes = payload
+        self.view.set_buttons_enabled(False)
+        self.view.set_query_status("Uploading raw binary...", found=False)
+        self.view.set_storage_status(None)
+
+        self.upload_worker = UploadWorker(sha256, filename, file_bytes)
+        self.upload_worker.upload_complete.connect(self._on_upload_complete)
+        self.upload_worker.upload_error.connect(self._on_upload_error)
+        self.upload_worker.start()
+
+    def _on_upload_complete(self, expected_sha: str, result):
+        if expected_sha != self._get_sha256():
+            return
+
+        returned_sha = (getattr(result, 'sha256', '') or '').lower()
+        if returned_sha != expected_sha.lower():
+            self._on_upload_error(expected_sha, "Uploaded binary SHA256 did not match the active binary")
+            return
+
+        self._last_has_stored_binary = True
+        self.view.set_buttons_enabled(True)
+        self.view.set_storage_status(True)
+        self.view.set_query_status("Raw binary uploaded", found=True)
+        self.handle_query()
+
+    def _on_upload_error(self, expected_sha: str, error_msg: str):
+        if expected_sha != self._get_sha256():
+            return
+        self.view.set_buttons_enabled(True)
+        self.view.set_query_status(f"Error: {error_msg}", found=False)
+        self.view.set_storage_status(None)
+        log.log_error(f"Upload error: {error_msg}")
 
     def _on_query_finished(self, expected_sha: str):
         if expected_sha != self._active_query_sha:
@@ -1087,10 +1218,17 @@ class SymGraphController(QObject):
             'scope': scope,
             'push_symbols': bool(selected_symbols),
             'push_graph': graph_data is not None,
-            'visibility': visibility
+            'visibility': visibility,
+            'ensure_binary_upload': self._last_has_stored_binary is not True,
         }
         self._pending_push_documents = list(selected_documents)
         binary_metadata = self._get_original_binary_metadata()
+        upload_payload = self._build_binary_upload_payload() if self._last_has_stored_binary is not True else None
+        if self._last_has_stored_binary is not True and upload_payload is None:
+            self.view.hide_push_progress()
+            self.view.set_buttons_enabled(True)
+            self.view.set_push_status("Error: unable to access raw binary bytes for upload", success=False)
+            return
 
         # Start push worker
         self.push_worker = PushWorker(
@@ -1100,7 +1238,10 @@ class SymGraphController(QObject):
             graph_data,
             visibility=visibility,
             fingerprints=fingerprints,
-            binary_metadata=binary_metadata
+            binary_metadata=binary_metadata,
+            upload_filename=upload_payload[0] if upload_payload else None,
+            upload_bytes=upload_payload[1] if upload_payload else None,
+            ensure_binary_upload=self._last_has_stored_binary is not True
         )
         self.push_worker.push_complete.connect(self._on_push_complete)
         self.push_worker.push_error.connect(self._on_push_error)
@@ -1113,6 +1254,8 @@ class SymGraphController(QObject):
         self.view.hide_push_progress()
 
         if result.success:
+            self._last_has_stored_binary = True
+            self.view.set_storage_status(True)
             msg_parts = []
             if result.symbols_pushed > 0:
                 msg_parts.append(f"{result.symbols_pushed} symbols")

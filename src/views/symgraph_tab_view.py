@@ -48,6 +48,7 @@ class SymGraphTabView(QWidget):
     )
 
     query_requested = Signal()
+    upload_binary_requested = Signal()
     auto_refresh_changed = Signal(bool)
     open_binary_requested = Signal()
     pull_preview_requested = Signal()
@@ -143,6 +144,9 @@ class SymGraphTabView(QWidget):
         self.query_button = QPushButton("Refresh")
         self.query_button.clicked.connect(self.query_requested.emit)
         remote_header.addWidget(self.query_button)
+        self.upload_binary_button = QPushButton("Upload Binary")
+        self.upload_binary_button.clicked.connect(self.upload_binary_requested.emit)
+        remote_header.addWidget(self.upload_binary_button)
         self.open_binary_button = QPushButton("Open in SymGraph")
         self.open_binary_button.setEnabled(False)
         self.open_binary_button.clicked.connect(self.open_binary_requested.emit)
@@ -152,6 +156,8 @@ class SymGraphTabView(QWidget):
         self.status_label = QLabel("Use Refresh to check whether this binary already exists in SymGraph.")
         self.status_label.setWordWrap(True)
         remote_layout.addWidget(self.status_label)
+        self.storage_status_label = QLabel("Stored Binary: Unknown")
+        self.storage_status_label.setStyleSheet("color: palette(mid);")
 
         self.stats_frame = QFrame()
         stats_layout = QGridLayout(self.stats_frame)
@@ -171,7 +177,8 @@ class SymGraphTabView(QWidget):
         stats_layout.addWidget(self.edges_stat, 1, 1)
         stats_layout.addWidget(self.updated_stat, 2, 0)
         stats_layout.addWidget(self.latest_revision_stat, 2, 1)
-        stats_layout.addWidget(self.accessible_versions_stat, 3, 0, 1, 2)
+        stats_layout.addWidget(self.accessible_versions_stat, 3, 0)
+        stats_layout.addWidget(self.storage_status_label, 3, 1)
         self.stats_frame.setVisible(False)
         remote_layout.addWidget(self.stats_frame)
 
@@ -915,6 +922,17 @@ class SymGraphTabView(QWidget):
         self._open_binary_url = url
         self.open_binary_button.setEnabled(bool(url))
 
+    def set_storage_status(self, stored: Optional[bool]):
+        if stored is True:
+            self.storage_status_label.setText("Stored Binary: Stored")
+            self.storage_status_label.setStyleSheet("color: green;")
+        elif stored is False:
+            self.storage_status_label.setText("Stored Binary: Missing")
+            self.storage_status_label.setStyleSheet("color: red;")
+        else:
+            self.storage_status_label.setText("Stored Binary: Unknown")
+            self.storage_status_label.setStyleSheet("color: palette(mid);")
+
     def get_open_binary_url(self) -> Optional[str]:
         return self._open_binary_url
 
@@ -1156,6 +1174,7 @@ class SymGraphTabView(QWidget):
     def set_buttons_enabled(self, enabled: bool):
         for button in (
             self.query_button,
+            self.upload_binary_button,
             self.open_binary_button,
             self.pull_preview_button,
             self.fetch_reset_button,

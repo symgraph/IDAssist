@@ -114,6 +114,28 @@ class BinaryStats:
 
 
 @dataclass
+class BinaryUploadResult:
+    """Result of uploading a raw binary to SymGraph."""
+    sha256: str
+    binary_id: str
+    file_size: int
+    is_new: bool = False
+    message: Optional[str] = None
+    metadata_extracted: bool = False
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'BinaryUploadResult':
+        return cls(
+            sha256=str(data.get('sha256', '') or ''),
+            binary_id=str(data.get('binary_id', '') or ''),
+            file_size=_parse_int(data.get('file_size'), 0),
+            is_new=bool(data.get('is_new', False)),
+            message=data.get('message'),
+            metadata_extracted=bool(data.get('metadata_extracted', False)),
+        )
+
+
+@dataclass
 class BinaryRevision:
     """Accessible binary revision metadata."""
     version: int
@@ -522,6 +544,7 @@ class QueryResult:
     revisions: List[BinaryRevision] = field(default_factory=list)
     latest_revision: Optional[int] = None
     selected_revision: Optional[int] = None
+    has_stored_binary: Optional[bool] = None
     error: Optional[str] = None
 
     @classmethod
@@ -530,7 +553,8 @@ class QueryResult:
         stats: Optional[BinaryStats] = None,
         revisions: Optional[List[BinaryRevision]] = None,
         latest_revision: Optional[int] = None,
-        selected_revision: Optional[int] = None
+        selected_revision: Optional[int] = None,
+        has_stored_binary: Optional[bool] = None
     ) -> 'QueryResult':
         """Create a successful query result."""
         return cls(
@@ -538,7 +562,8 @@ class QueryResult:
             stats=stats,
             revisions=revisions or [],
             latest_revision=latest_revision,
-            selected_revision=selected_revision
+            selected_revision=selected_revision,
+            has_stored_binary=has_stored_binary
         )
 
     @classmethod

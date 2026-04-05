@@ -22,7 +22,7 @@ except ImportError:
 from .settings_service import settings_service
 from .models.symgraph_models import (
     BinaryStats, BinaryRevision, Symbol, GraphNode, GraphEdge,
-    SymbolExport, GraphExport, QueryResult, PushResult,
+    SymbolExport, GraphExport, QueryResult, PushResult, BinaryUploadResult,
     DocumentSummary, Document,
     PullPreviewResult, ConflictEntry, ConflictAction
 )
@@ -322,6 +322,75 @@ class SymGraphService:
         except httpx.RequestError as e:
             raise SymGraphNetworkError(f"Network error: {str(e)}")
 
+    async def get_stored_binary_flag(self, sha256: str) -> Optional[bool]:
+        """Get whether SymGraph has a stored raw binary for this SHA256."""
+        self._check_httpx()
+        self._check_auth()
+
+        url = f"{self.base_url}/api/v1/binaries/{sha256}"
+        log.log_debug(f"Getting binary info: {url}")
+
+        try:
+            async with httpx.AsyncClient(**self._client_kwargs(30.0)) as client:
+                response = await client.get(
+                    url,
+                    headers=self._get_headers(authenticated=True)
+                )
+
+                if response.status_code == 200:
+                    data = response.json() or {}
+                    if isinstance(data, dict):
+                        if 'has_stored_binary' in data:
+                            return bool(data.get('has_stored_binary'))
+                        binary = data.get('binary')
+                        if isinstance(binary, dict) and 'has_stored_binary' in binary:
+                            return bool(binary.get('has_stored_binary'))
+                    return None
+                elif response.status_code == 401:
+                    raise SymGraphAuthError("Invalid API key")
+                elif response.status_code == 404:
+                    return False
+                else:
+                    self._raise_api_error("fetching binary info", response)
+
+        except httpx.TimeoutException:
+            raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
+        except httpx.RequestError as e:
+            raise SymGraphNetworkError(f"Network error: {str(e)}")
+
+    async def upload_binary(self, filename: str, file_bytes: bytes) -> BinaryUploadResult:
+        """Upload raw binary bytes to SymGraph storage without triggering analysis."""
+        self._check_httpx()
+        self._check_auth()
+
+        upload_name = (filename or "").strip() or "binary.bin"
+        url = f"{self.base_url}/api/v1/analysis/upload"
+        log.log_debug(f"Uploading raw binary: {upload_name} ({len(file_bytes)} bytes)")
+
+        try:
+            async with httpx.AsyncClient(**self._client_kwargs(120.0)) as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        'Accept': 'application/json',
+                        'User-Agent': 'IDAssist-SymGraph/1.0',
+                        'X-API-Key': self.api_key or '',
+                    },
+                    files={'file': (upload_name, file_bytes, 'application/octet-stream')}
+                )
+
+                if response.status_code == 200:
+                    return BinaryUploadResult.from_dict(response.json() or {})
+                elif response.status_code == 401:
+                    raise SymGraphAuthError("Invalid API key")
+                else:
+                    self._raise_api_error("uploading binary", response)
+
+        except httpx.TimeoutException:
+            raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
+        except httpx.RequestError as e:
+            raise SymGraphNetworkError(f"Network error: {str(e)}")
+
     async def list_binary_versions(self, sha256: str) -> List[BinaryRevision]:
         """List accessible binary revisions for a binary."""
         self._check_httpx()
@@ -377,6 +446,12 @@ class SymGraphService:
 
             revisions: List[BinaryRevision] = []
             latest_revision: Optional[int] = None
+            has_stored_binary: Optional[bool] = None
+            if self.has_api_key:
+                try:
+                    has_stored_binary = await self.get_stored_binary_flag(sha256)
+                except SymGraphServiceError as e:
+                    log.log_warn(f"Unable to fetch binary storage state for {sha256[:16]}...: {e}")
             if include_versions and self.has_api_key:
                 try:
                     revisions = await self.list_binary_versions(sha256)
@@ -395,7 +470,8 @@ class SymGraphService:
                 stats=stats,
                 revisions=revisions,
                 latest_revision=latest_revision,
-                selected_revision=effective_version
+                selected_revision=effective_version,
+                has_stored_binary=has_stored_binary
             )
 
         except SymGraphServiceError as e:
