@@ -8,13 +8,15 @@ querying, pushing, and pulling symbols and graph data.
 
 import asyncio
 import json
+import os
 import webbrowser
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any, Callable, Tuple
 from ..qt_compat import QMessageBox, QThread, Signal, QObject
 
 from src.services.analysis_db_service import analysis_db_service
 from src.services.graphrag.graph_store import GraphStore
 from src.services.graphrag.models import GraphNode as LocalGraphNode, GraphEdge as LocalGraphEdge, NodeType, EdgeType
+from src.services.settings_service import settings_service
 
 from src.services.symgraph_service import (
     symgraph_service, SymGraphServiceError, SymGraphAuthError,
@@ -31,6 +33,7 @@ from src.ida_compat import log, get_binary_hash, execute_on_main_thread
 # IDA imports
 try:
     import idaapi
+    import ida_ida
     import idautils
     import ida_funcs
     import ida_name
@@ -108,7 +111,8 @@ class PushWorker(QThread):
         documents: Optional[List[Dict]] = None,
         graph_data: Optional[Dict] = None,
         visibility: str = "public",
-        fingerprints: Optional[List[Dict[str, str]]] = None
+        fingerprints: Optional[List[Dict[str, str]]] = None,
+        binary_metadata: Optional[Dict[str, Any]] = None
     ):
         super().__init__()
         self.sha256 = sha256
@@ -117,6 +121,7 @@ class PushWorker(QThread):
         self.graph_data = graph_data
         self.visibility = visibility
         self.fingerprints = fingerprints or []  # List of {'type': str, 'value': str}
+        self.binary_metadata = dict(binary_metadata or {})
 
     def run(self):
         try:
@@ -134,6 +139,14 @@ class PushWorker(QThread):
                         )
                     )
                     total_result.binary_revision = target_revision
+
+                    if self.binary_metadata:
+                        loop.run_until_complete(
+                            symgraph_service.update_binary_metadata(
+                                self.sha256,
+                                self.binary_metadata
+                            )
+                        )
 
                 # Push symbols in chunks if provided
                 if self.symbols:
@@ -686,8 +699,11 @@ class SymGraphController(QObject):
         self._pending_push_documents: List[Dict[str, Any]] = []
         self._pending_apply_documents: List[Dict[str, Any]] = []
         self._pending_apply_summary: Dict[str, int] = {}
+        self._last_binary_sha: Optional[str] = None
+        self._active_query_sha: Optional[str] = None
 
         # Connect view signals
+        self.view.set_auto_refresh_enabled(settings_service.is_symgraph_auto_refresh_enabled())
         self._connect_signals()
 
         # Update binary info if available
@@ -696,6 +712,7 @@ class SymGraphController(QObject):
     def _connect_signals(self):
         """Connect view signals to controller methods."""
         self.view.query_requested.connect(self.handle_query)
+        self.view.auto_refresh_changed.connect(self._set_auto_refresh_enabled)
         self.view.open_binary_requested.connect(self.handle_open_binary)
         self.view.push_preview_requested.connect(self.handle_push_preview)
         self.view.push_execute_requested.connect(self.handle_push)
@@ -707,11 +724,19 @@ class SymGraphController(QObject):
         """Initialize binary context (called when binary is loaded in IDA)"""
         self._update_binary_info()
 
+    def _is_auto_refresh_enabled(self) -> bool:
+        return settings_service.is_symgraph_auto_refresh_enabled()
+
+    def _set_auto_refresh_enabled(self, enabled: bool):
+        settings_service.set_symgraph_auto_refresh_enabled(enabled)
+
     def _update_binary_info(self):
         """Update binary info display from current IDA database."""
+        previous_sha = self._last_binary_sha
         if _IN_IDA:
             try:
-                name = ida_nalt.get_root_filename() or "Unknown"
+                binary_metadata = self._get_original_binary_metadata()
+                name = binary_metadata.get('file_name') or ida_nalt.get_root_filename() or "Unknown"
                 sha256 = self._get_sha256()
                 local_metadata: Dict[str, Any] = {}
                 try:
@@ -732,11 +757,26 @@ class SymGraphController(QObject):
                 except Exception:
                     pass
                 self.view.set_binary_info(name, sha256, local_metadata=local_metadata or None)
+                if sha256 != previous_sha:
+                    self._last_binary_sha = sha256
+                    self.view.hide_stats()
+                    self.view.reset_query_status()
+                    self.view.set_open_binary_url(None)
+                    self.view.clear_conflicts()
+                    self.view.clear_push_preview()
+                    if sha256 and self._is_auto_refresh_enabled():
+                        self.handle_query()
             except Exception as e:
                 log.log_error(f"Error getting binary info: {e}")
                 self.view.set_binary_info("<error>", None, local_metadata=None)
         else:
+            self._last_binary_sha = None
             self.view.set_binary_info("<no binary loaded>", None, local_metadata=None)
+            self.view.hide_stats()
+            self.view.reset_query_status()
+            self.view.set_open_binary_url(None)
+            self.view.clear_conflicts()
+            self.view.clear_push_preview()
 
     def _get_symbol_provenance(self, is_auto: bool, address: int, symbol_type: str) -> str:
         """Determine symbol provenance: decompiler, llm, or user."""
@@ -752,6 +792,114 @@ class SymGraphController(QObject):
         except Exception:
             pass
         return 'user'
+
+    @staticmethod
+    def _basename_only(path: Optional[str]) -> Optional[str]:
+        if not path:
+            return None
+        return path.split('/')[-1].split('\\')[-1] or None
+
+    @staticmethod
+    def _is_analysis_container_name(filename: Optional[str]) -> bool:
+        if not filename:
+            return False
+        lower_name = filename.lower()
+        return lower_name.endswith('.i64') or lower_name.endswith('.idb')
+
+    @staticmethod
+    def _normalize_architecture(raw_value: Optional[str], bitness: Optional[int]) -> Optional[str]:
+        if not raw_value:
+            return None
+        value = str(raw_value).strip().lower()
+        if value == "metapc":
+            return "x86_64" if bitness == 64 else "x86"
+        if value in {"x86", "i386", "i486", "i586", "i686", "80386"}:
+            return "x86"
+        if value in {"x86_64", "amd64", "x64"}:
+            return "x86_64"
+        if value in {"arm64", "aarch64"}:
+            return "arm64"
+        if value.startswith("arm"):
+            return "arm64" if bitness == 64 else "arm"
+        if value in {"mips", "mips32", "mipsel", "mipseb"}:
+            return "mips"
+        if value in {"mips64", "mips64el", "mips64eb"}:
+            return "mips64"
+        if value in {"ppc", "powerpc"}:
+            return "ppc"
+        if value in {"ppc64", "powerpc64", "ppc64le"}:
+            return "ppc64"
+        if value in {"riscv", "riscv32"}:
+            return "riscv"
+        if value == "riscv64":
+            return "riscv64"
+        if value == "sparc":
+            return "sparc"
+        if value == "sparc64":
+            return "sparc64"
+        return None
+
+    @staticmethod
+    def _map_ida_filetype(filetype: int) -> Tuple[Optional[str], Optional[str]]:
+        platform_map = {
+            3: "raw",
+            11: "linux",
+            17: "windows",
+            20: "macos",
+        }
+        format_map = {
+            3: "bin",
+            11: "elf",
+            16: "coff",
+            17: "pe",
+            20: "macho",
+        }
+        return platform_map.get(filetype), format_map.get(filetype)
+
+    def _get_original_binary_metadata(self) -> Dict[str, Any]:
+        """Build metadata for the original input binary, not the IDA database file."""
+        metadata: Dict[str, Any] = {}
+        if not _IN_IDA:
+            return metadata
+
+        input_path = ida_nalt.get_input_file_path() or ""
+        file_name = self._basename_only(input_path)
+        if not file_name:
+            candidate_name = self._basename_only(ida_nalt.get_root_filename() or "")
+            if candidate_name and not self._is_analysis_container_name(candidate_name):
+                file_name = candidate_name
+        if file_name and not self._is_analysis_container_name(file_name):
+            metadata['file_name'] = file_name
+
+        if input_path and os.path.exists(input_path):
+            try:
+                metadata['file_size'] = int(os.path.getsize(input_path))
+            except OSError:
+                pass
+
+        try:
+            bitness = 64 if ida_ida.inf_is_64bit() else 32
+            arch = self._normalize_architecture(ida_ida.inf_get_procname() or None, bitness)
+            if arch:
+                metadata['architecture'] = arch
+        except Exception:
+            pass
+
+        try:
+            platform, file_format = self._map_ida_filetype(ida_ida.inf_get_filetype())
+            if platform:
+                metadata['platform'] = platform
+            if file_format:
+                metadata['file_format'] = file_format
+        except Exception:
+            pass
+
+        try:
+            metadata['endianness'] = 'big' if ida_ida.inf_is_be() else 'little'
+        except Exception:
+            pass
+
+        return metadata
 
     def _get_sha256(self) -> Optional[str]:
         """Get SHA256 hash of the original binary."""
@@ -769,17 +917,23 @@ class SymGraphController(QObject):
         self.view.hide_stats()
         self.view.set_open_binary_url(None)
         self.view.set_buttons_enabled(False)
+        self._active_query_sha = sha256
 
         # Start query worker
         self.query_worker = QueryWorker(sha256)
-        self.query_worker.query_complete.connect(self._on_query_complete)
-        self.query_worker.query_error.connect(self._on_query_error)
-        self.query_worker.finished.connect(lambda: self.view.set_buttons_enabled(True))
+        self.query_worker.query_complete.connect(
+            lambda result, expected_sha=sha256: self._on_query_complete(expected_sha, result)
+        )
+        self.query_worker.query_error.connect(
+            lambda error_msg, expected_sha=sha256: self._on_query_error(expected_sha, error_msg)
+        )
+        self.query_worker.finished.connect(lambda expected_sha=sha256: self._on_query_finished(expected_sha))
         self.query_worker.start()
 
-    def _on_query_complete(self, result: QueryResult):
+    def _on_query_complete(self, expected_sha: str, result: QueryResult):
         """Handle query completion."""
-        self.view.set_buttons_enabled(True)
+        if expected_sha != self._active_query_sha or expected_sha != self._get_sha256():
+            return
 
         if result.error:
             self.view.set_query_status(f"Error: {result.error}", found=False)
@@ -794,6 +948,7 @@ class SymGraphController(QObject):
                     symbols=result.stats.symbol_count,
                     functions=result.stats.function_count,
                     nodes=result.stats.graph_node_count,
+                    edges=result.stats.graph_edge_count,
                     last_updated=result.stats.last_queried_at,
                     revisions=result.revisions,
                     latest_revision=result.latest_revision,
@@ -804,12 +959,18 @@ class SymGraphController(QObject):
             self.view.set_open_binary_url(None)
             self.view.hide_stats()
 
-    def _on_query_error(self, error_msg: str):
+    def _on_query_error(self, expected_sha: str, error_msg: str):
         """Handle query error."""
-        self.view.set_buttons_enabled(True)
+        if expected_sha != self._active_query_sha or expected_sha != self._get_sha256():
+            return
         self.view.set_query_status(f"Error: {error_msg}", found=False)
         self.view.set_open_binary_url(None)
         log.log_error(f"Query error: {error_msg}")
+
+    def _on_query_finished(self, expected_sha: str):
+        if expected_sha != self._active_query_sha:
+            return
+        self.view.set_buttons_enabled(True)
 
     def handle_open_binary(self):
         """Open the current binary in the SymGraph web UI."""
@@ -929,6 +1090,7 @@ class SymGraphController(QObject):
             'visibility': visibility
         }
         self._pending_push_documents = list(selected_documents)
+        binary_metadata = self._get_original_binary_metadata()
 
         # Start push worker
         self.push_worker = PushWorker(
@@ -937,7 +1099,8 @@ class SymGraphController(QObject):
             document_payloads,
             graph_data,
             visibility=visibility,
-            fingerprints=fingerprints
+            fingerprints=fingerprints,
+            binary_metadata=binary_metadata
         )
         self.push_worker.push_complete.connect(self._on_push_complete)
         self.push_worker.push_error.connect(self._on_push_error)
@@ -1122,7 +1285,7 @@ class SymGraphController(QObject):
     def _on_pull_preview_finished(self):
         """Handle pull preview worker finished (cleanup)."""
         self.view.set_buttons_enabled(True)
-        self.view.set_pull_button_text("Preview Fetch")
+        self.view.set_pull_button_text("Preview Import")
 
     def _on_pull_preview_error(self, error_msg: str):
         """Handle pull preview error."""

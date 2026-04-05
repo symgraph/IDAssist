@@ -26,9 +26,9 @@ from ..qt_compat import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
-    QFont,
     Signal,
     Qt,
 )
@@ -48,6 +48,7 @@ class SymGraphTabView(QWidget):
     )
 
     query_requested = Signal()
+    auto_refresh_changed = Signal(bool)
     open_binary_requested = Signal()
     pull_preview_requested = Signal()
     apply_selected_requested = Signal(list)
@@ -63,6 +64,8 @@ class SymGraphTabView(QWidget):
         super().__init__()
         self._graph_preview = None
         self._graph_stats = None
+        self._all_conflicts: List[ConflictEntry] = []
+        self._conflict_selection_state: Dict[Any, bool] = {}
         self._push_graph_data = None
         self._push_graph_stats = None
         self._push_preview_symbols: List[Dict[str, Any]] = []
@@ -74,82 +77,87 @@ class SymGraphTabView(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout()
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(5)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
-        self._create_binary_info_section(layout)
+        self._create_overview_section(layout)
 
-        self.subtabs = QTabWidget()
-        self.subtabs.addTab(self._create_status_tab(), "Status")
-        self.subtabs.addTab(self._create_fetch_tab(), "Fetch")
-        self.subtabs.addTab(self._create_push_tab(), "Push")
-        layout.addWidget(self.subtabs)
+        self.workflow_tabs = QTabWidget()
+        self.workflow_tabs.addTab(self._create_fetch_tab(), "Import From SymGraph")
+        self.workflow_tabs.addTab(self._create_push_tab(), "Publish To SymGraph")
+        layout.addWidget(self.workflow_tabs, 1)
 
         self.setLayout(layout)
 
-    def _create_binary_info_section(self, parent_layout):
-        info_frame = QFrame()
-        info_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-        info_layout = QVBoxLayout(info_frame)
-        info_layout.setContentsMargins(10, 10, 10, 10)
+    def _create_overview_section(self, parent_layout):
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(8)
 
-        name_layout = QHBoxLayout()
-        name_layout.addWidget(QLabel("Binary:"))
+        local_frame = QFrame()
+        local_frame.setFrameStyle(QFrame.Box | QFrame.Sunken)
+        local_layout = QVBoxLayout(local_frame)
+        local_layout.setContentsMargins(10, 10, 10, 10)
+        local_layout.setSpacing(8)
+
+        local_header = QHBoxLayout()
+        local_header.addWidget(QLabel("Local Status"))
+        local_header.addStretch()
+        local_layout.addLayout(local_header)
+
+        identity_grid = QGridLayout()
+        identity_grid.setHorizontalSpacing(10)
+        identity_grid.setVerticalSpacing(4)
+        identity_grid.addWidget(QLabel("Binary"), 0, 0)
         self.binary_name_label = QLabel("<no binary loaded>")
-        self.binary_name_label.setStyleSheet("font-weight: bold;")
-        name_layout.addWidget(self.binary_name_label)
-        name_layout.addStretch()
-        info_layout.addLayout(name_layout)
-
-        hash_layout = QHBoxLayout()
-        hash_layout.addWidget(QLabel("SHA256:"))
+        self.binary_name_label.setStyleSheet("font-weight: 600;")
+        identity_grid.addWidget(self.binary_name_label, 0, 1)
+        identity_grid.addWidget(QLabel("SHA256"), 1, 0)
         self.sha256_label = QLabel("<none>")
         self.sha256_label.setStyleSheet("font-family: monospace; font-size: 11px;")
-        hash_layout.addWidget(self.sha256_label)
-        hash_layout.addStretch()
-        info_layout.addLayout(hash_layout)
+        identity_grid.addWidget(self.sha256_label, 1, 1)
+        local_layout.addLayout(identity_grid)
 
-        summary_layout = QHBoxLayout()
-        summary_layout.addWidget(QLabel("Local Summary:"))
         self.local_summary_label = QLabel("No binary loaded")
-        self.local_summary_label.setStyleSheet("color: gray;")
-        summary_layout.addWidget(self.local_summary_label)
-        summary_layout.addStretch()
-        info_layout.addLayout(summary_layout)
+        self.local_summary_label.setProperty("role", "muted")
+        self.local_summary_label.setStyleSheet("color: palette(mid);")
+        local_layout.addWidget(self.local_summary_label)
 
-        parent_layout.addWidget(info_frame)
+        remote_frame = QFrame()
+        remote_frame.setFrameStyle(QFrame.Box | QFrame.Sunken)
+        remote_layout = QVBoxLayout(remote_frame)
+        remote_layout.setContentsMargins(10, 10, 10, 10)
+        remote_layout.setSpacing(8)
 
-    def _create_status_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        server_group = QGroupBox("SymGraph Server")
-        server_layout = QVBoxLayout()
-
-        button_row = QHBoxLayout()
-        self.query_button = QPushButton("Query SymGraph")
+        remote_header = QHBoxLayout()
+        remote_header.addWidget(QLabel("Remote Status"))
+        self.status_badge = QLabel("Not checked")
+        self.status_badge.setStyleSheet("padding: 2px 8px; background: palette(midlight); color: palette(text);")
+        remote_header.addWidget(self.status_badge)
+        remote_header.addStretch()
+        self.auto_refresh_checkbox = QCheckBox("Auto-refresh")
+        self.auto_refresh_checkbox.setChecked(False)
+        self.auto_refresh_checkbox.toggled.connect(self.auto_refresh_changed.emit)
+        remote_header.addWidget(self.auto_refresh_checkbox)
+        self.query_button = QPushButton("Refresh")
         self.query_button.clicked.connect(self.query_requested.emit)
-        button_row.addWidget(self.query_button)
+        remote_header.addWidget(self.query_button)
         self.open_binary_button = QPushButton("Open in SymGraph")
         self.open_binary_button.setEnabled(False)
         self.open_binary_button.clicked.connect(self.open_binary_requested.emit)
-        button_row.addWidget(self.open_binary_button)
-        button_row.addStretch()
-        server_layout.addLayout(button_row)
+        remote_header.addWidget(self.open_binary_button)
+        remote_layout.addLayout(remote_header)
 
-        status_row = QHBoxLayout()
-        status_row.addWidget(QLabel("Status:"))
-        self.status_label = QLabel("Not checked")
-        self.status_label.setStyleSheet("color: gray;")
-        status_row.addWidget(self.status_label)
-        status_row.addStretch()
-        server_layout.addLayout(status_row)
+        self.status_label = QLabel("Use Refresh to check whether this binary already exists in SymGraph.")
+        self.status_label.setWordWrap(True)
+        remote_layout.addWidget(self.status_label)
 
         self.stats_frame = QFrame()
-        self.stats_frame.setFrameStyle(QFrame.Box | QFrame.Sunken)
         stats_layout = QGridLayout(self.stats_frame)
+        stats_layout.setContentsMargins(0, 0, 0, 0)
+        stats_layout.setHorizontalSpacing(18)
+        stats_layout.setVerticalSpacing(4)
         self.symbols_stat = QLabel("Symbols: -")
         self.functions_stat = QLabel("Functions: -")
         self.nodes_stat = QLabel("Graph Nodes: -")
@@ -165,11 +173,11 @@ class SymGraphTabView(QWidget):
         stats_layout.addWidget(self.latest_revision_stat, 2, 1)
         stats_layout.addWidget(self.accessible_versions_stat, 3, 0, 1, 2)
         self.stats_frame.setVisible(False)
-        server_layout.addWidget(self.stats_frame)
-        server_group.setLayout(server_layout)
-        layout.addWidget(server_group)
-        layout.addStretch()
-        return page
+        remote_layout.addWidget(self.stats_frame)
+
+        container_layout.addWidget(local_frame)
+        container_layout.addWidget(remote_frame)
+        parent_layout.addWidget(container)
 
     def _create_fetch_tab(self) -> QWidget:
         page = QWidget()
@@ -177,24 +185,19 @@ class SymGraphTabView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        config_group = QGroupBox("Fetch Configuration")
+        config_group = QGroupBox("Import Configuration")
         config_layout = QVBoxLayout()
 
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel("Version:"))
+        row1.addWidget(QLabel("Source Revision:"))
         self.fetch_version_combo = QComboBox()
         self.fetch_version_combo.setMinimumWidth(180)
         row1.addWidget(self.fetch_version_combo)
-        row1.addSpacing(12)
-        row1.addWidget(QLabel("Name Filter:"))
-        self.fetch_name_filter = QLineEdit()
-        self.fetch_name_filter.setPlaceholderText("Substring match")
-        row1.addWidget(self.fetch_name_filter)
         row1.addStretch()
         config_layout.addLayout(row1)
 
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Symbol Types:"))
+        row2.addWidget(QLabel("Include:"))
         self.pull_functions_cb = QCheckBox("Functions")
         self.pull_functions_cb.setChecked(True)
         self.pull_variables_cb = QCheckBox("Variables")
@@ -214,27 +217,41 @@ class SymGraphTabView(QWidget):
         row2.addStretch()
         config_layout.addLayout(row2)
 
-        row3 = QHBoxLayout()
-        row3.addWidget(QLabel("Min Confidence:"))
+        advanced_row = QHBoxLayout()
+        self.fetch_advanced_toggle = self._create_disclosure_button("Advanced Filters")
+        advanced_row.addWidget(self.fetch_advanced_toggle)
+        advanced_row.addStretch()
+        config_layout.addLayout(advanced_row)
+
+        self.fetch_advanced_panel = QWidget()
+        fetch_advanced_layout = QGridLayout(self.fetch_advanced_panel)
+        fetch_advanced_layout.setContentsMargins(0, 0, 0, 0)
+        fetch_advanced_layout.setHorizontalSpacing(12)
+        fetch_advanced_layout.setVerticalSpacing(6)
+        fetch_advanced_layout.addWidget(QLabel("Name Filter:"), 0, 0)
+        self.fetch_name_filter = QLineEdit()
+        self.fetch_name_filter.setPlaceholderText("Substring match")
+        fetch_advanced_layout.addWidget(self.fetch_name_filter, 0, 1)
+        fetch_advanced_layout.addWidget(QLabel("Min Confidence:"), 1, 0)
         self.confidence_slider = QSlider(Qt.Horizontal)
         self.confidence_slider.setMinimum(0)
         self.confidence_slider.setMaximum(100)
         self.confidence_slider.setValue(0)
         self.confidence_slider.setFixedWidth(140)
         self.confidence_slider.valueChanged.connect(self._on_confidence_changed)
-        row3.addWidget(self.confidence_slider)
+        fetch_advanced_layout.addWidget(self.confidence_slider, 1, 1)
         self.confidence_value_label = QLabel("0.0")
         self.confidence_value_label.setFixedWidth(30)
-        row3.addWidget(self.confidence_value_label)
-        row3.addSpacing(16)
-        row3.addWidget(QLabel("Graph Merge:"))
+        fetch_advanced_layout.addWidget(self.confidence_value_label, 1, 2)
+        fetch_advanced_layout.addWidget(QLabel("Graph Merge:"), 2, 0)
         merge_widget, _ = self._create_merge_policy_widget()
-        row3.addWidget(merge_widget)
-        row3.addStretch()
-        config_layout.addLayout(row3)
+        fetch_advanced_layout.addWidget(merge_widget, 2, 1, 1, 2)
+        self.fetch_advanced_panel.setVisible(False)
+        self.fetch_advanced_toggle.toggled.connect(self.fetch_advanced_panel.setVisible)
+        config_layout.addWidget(self.fetch_advanced_panel)
 
         action_row = QHBoxLayout()
-        self.pull_preview_button = QPushButton("Preview Fetch")
+        self.pull_preview_button = QPushButton("Preview Import")
         self.pull_preview_button.clicked.connect(self.pull_preview_requested.emit)
         action_row.addWidget(self.pull_preview_button)
         self.fetch_reset_button = QPushButton("Reset")
@@ -252,7 +269,7 @@ class SymGraphTabView(QWidget):
         self.summary_new_count = QLabel("New: 0")
         self.summary_conflict_count = QLabel("Conflicts: 0")
         self.summary_same_count = QLabel("Same: 0")
-        self.summary_selected_count = QLabel("Selected: 0")
+        self.summary_selected_count = QLabel("Selected: 0 symbols / 0 docs")
         self.summary_document_count = QLabel("Documents: 0")
         self.summary_graph_nodes_label = QLabel("Graph Nodes: 0")
         self.summary_graph_edges_label = QLabel("Graph Edges: 0")
@@ -271,10 +288,31 @@ class SymGraphTabView(QWidget):
         summary_layout.addStretch()
         layout.addWidget(self.fetch_summary_frame)
 
+        preview_tabs = QTabWidget()
+
+        changes_page = QWidget()
+        changes_layout = QVBoxLayout(changes_page)
+        changes_layout.setContentsMargins(0, 0, 0, 0)
+        changes_layout.setSpacing(8)
+
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Show:"))
+        self.filter_new_cb = QCheckBox("New")
+        self.filter_new_cb.setChecked(True)
+        self.filter_conflicts_cb = QCheckBox("Conflicts")
+        self.filter_conflicts_cb.setChecked(True)
+        self.filter_same_cb = QCheckBox("Unchanged")
+        self.filter_same_cb.setChecked(False)
+        for widget in (self.filter_new_cb, self.filter_conflicts_cb, self.filter_same_cb):
+            widget.toggled.connect(self._refresh_conflict_table)
+            filter_row.addWidget(widget)
+        filter_row.addStretch()
+        changes_layout.addLayout(filter_row)
+
         self.conflict_table = QTableWidget()
         self.conflict_table.setColumnCount(6)
         self.conflict_table.setHorizontalHeaderLabels(
-            ["Select", "Address", "Type/Storage", "Local Name", "Remote Name", "Action"]
+            ["Select", "Address", "Type/Storage", "Local Name", "Remote Name", "Status"]
         )
         self.conflict_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.conflict_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -290,9 +328,13 @@ class SymGraphTabView(QWidget):
         self.conflict_table.setColumnWidth(2, 130)
         self.conflict_table.setColumnWidth(5, 90)
         self.conflict_table.setMinimumHeight(250)
-        layout.addWidget(self.conflict_table)
+        self.conflict_table.setAlternatingRowColors(True)
+        changes_layout.addWidget(self.conflict_table)
 
+        footer_row = QHBoxLayout()
         select_row = QHBoxLayout()
+        select_row.setContentsMargins(0, 0, 0, 0)
+        select_row.setSpacing(6)
         self.select_all_button = QPushButton("Select All")
         self.select_all_button.clicked.connect(self.on_select_all)
         select_row.addWidget(self.select_all_button)
@@ -308,19 +350,26 @@ class SymGraphTabView(QWidget):
         self.invert_selection_button = QPushButton("Invert")
         self.invert_selection_button.clicked.connect(self.on_invert_selection)
         select_row.addWidget(self.invert_selection_button)
-        select_row.addStretch()
-        layout.addLayout(select_row)
+        footer_row.addLayout(select_row)
+        footer_row.addStretch()
 
         apply_row = QHBoxLayout()
-        self.apply_all_new_button = QPushButton("Apply All New")
+        apply_row.setContentsMargins(0, 0, 0, 0)
+        apply_row.setSpacing(6)
+        self.apply_all_new_button = QPushButton("Apply Recommended")
         self.apply_all_new_button.clicked.connect(self.apply_all_new_requested.emit)
         apply_row.addWidget(self.apply_all_new_button)
         self.apply_button = QPushButton("Apply Selected")
         self.apply_button.clicked.connect(self.on_apply_clicked)
         apply_row.addWidget(self.apply_button)
-        apply_row.addStretch()
-        layout.addLayout(apply_row)
+        footer_row.addLayout(apply_row)
+        changes_layout.addLayout(footer_row)
+        preview_tabs.addTab(changes_page, "Changes")
 
+        documents_page = QWidget()
+        documents_layout = QVBoxLayout(documents_page)
+        documents_layout.setContentsMargins(0, 0, 0, 0)
+        documents_layout.setSpacing(8)
         self.fetch_documents_table = QTableWidget()
         self.fetch_documents_table.setColumnCount(5)
         self.fetch_documents_table.setHorizontalHeaderLabels(
@@ -338,9 +387,21 @@ class SymGraphTabView(QWidget):
         self.fetch_documents_table.setColumnWidth(2, 90)
         self.fetch_documents_table.setColumnWidth(3, 140)
         self.fetch_documents_table.setColumnWidth(4, 80)
-        self.fetch_documents_table.setMaximumHeight(150)
-        layout.addWidget(QLabel("Documents"))
-        layout.addWidget(self.fetch_documents_table)
+        self.fetch_documents_table.setAlternatingRowColors(True)
+        documents_layout.addWidget(self.fetch_documents_table)
+        preview_tabs.addTab(documents_page, "Documents")
+
+        graph_page = QWidget()
+        graph_layout = QVBoxLayout(graph_page)
+        graph_layout.setContentsMargins(0, 0, 0, 0)
+        graph_layout.setSpacing(8)
+        self.fetch_graph_summary_label = QLabel("No graph data loaded.")
+        self.fetch_graph_summary_label.setWordWrap(True)
+        graph_layout.addWidget(self.fetch_graph_summary_label)
+        graph_layout.addStretch()
+        preview_tabs.addTab(graph_page, "Graph")
+
+        layout.addWidget(preview_tabs, 1)
 
         self.fetch_progress_bar = QProgressBar()
         self.fetch_progress_bar.setVisible(False)
@@ -352,6 +413,7 @@ class SymGraphTabView(QWidget):
         layout.addWidget(self.fetch_progress_label)
 
         self.pull_status_label = QLabel("")
+        self.pull_status_label.setWordWrap(True)
         self.pull_status_label.setStyleSheet("color: gray;")
         layout.addWidget(self.pull_status_label)
         return page
@@ -362,7 +424,7 @@ class SymGraphTabView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        config_group = QGroupBox("Push Configuration")
+        config_group = QGroupBox("Publish Configuration")
         config_layout = QVBoxLayout()
 
         row1 = QHBoxLayout()
@@ -385,7 +447,7 @@ class SymGraphTabView(QWidget):
         config_layout.addLayout(row1)
 
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Symbol Types:"))
+        row2.addWidget(QLabel("Include:"))
         self.push_functions_cb = QCheckBox("Functions")
         self.push_functions_cb.setChecked(True)
         self.push_variables_cb = QCheckBox("Variables")
@@ -408,21 +470,31 @@ class SymGraphTabView(QWidget):
         row2.addStretch()
         config_layout.addLayout(row2)
 
-        row3 = QHBoxLayout()
-        row3.addWidget(QLabel("Name Filter:"))
+        advanced_row = QHBoxLayout()
+        self.push_advanced_toggle = self._create_disclosure_button("Advanced Filters")
+        advanced_row.addWidget(self.push_advanced_toggle)
+        advanced_row.addStretch()
+        config_layout.addLayout(advanced_row)
+
+        self.push_advanced_panel = QWidget()
+        push_advanced_layout = QGridLayout(self.push_advanced_panel)
+        push_advanced_layout.setContentsMargins(0, 0, 0, 0)
+        push_advanced_layout.setHorizontalSpacing(12)
+        push_advanced_layout.addWidget(QLabel("Name Filter:"), 0, 0)
         self.push_name_filter = QLineEdit()
         self.push_name_filter.setPlaceholderText("Substring match")
-        row3.addWidget(self.push_name_filter)
-        row3.addStretch()
-        config_layout.addLayout(row3)
+        push_advanced_layout.addWidget(self.push_name_filter, 0, 1)
+        self.push_advanced_panel.setVisible(False)
+        self.push_advanced_toggle.toggled.connect(self.push_advanced_panel.setVisible)
+        config_layout.addWidget(self.push_advanced_panel)
 
         action_row = QHBoxLayout()
-        self.push_preview_button = QPushButton("Preview Push")
+        self.push_preview_button = QPushButton("Preview Publish")
         self.push_preview_button.clicked.connect(self.push_preview_requested.emit)
         action_row.addWidget(self.push_preview_button)
-        self.push_button = QPushButton("Push Selected")
-        self.push_button.clicked.connect(self.push_execute_requested.emit)
-        action_row.addWidget(self.push_button)
+        self.push_reset_button = QPushButton("Reset")
+        self.push_reset_button.clicked.connect(self.clear_push_preview)
+        action_row.addWidget(self.push_reset_button)
         action_row.addStretch()
         config_layout.addLayout(action_row)
         config_group.setLayout(config_layout)
@@ -447,6 +519,12 @@ class SymGraphTabView(QWidget):
         push_summary_layout.addStretch()
         layout.addWidget(self.push_summary_frame)
 
+        push_preview_tabs = QTabWidget()
+
+        push_symbols_page = QWidget()
+        push_symbols_layout = QVBoxLayout(push_symbols_page)
+        push_symbols_layout.setContentsMargins(0, 0, 0, 0)
+        push_symbols_layout.setSpacing(8)
         self.push_preview_table = QTableWidget()
         self.push_preview_table.setColumnCount(6)
         self.push_preview_table.setHorizontalHeaderLabels(
@@ -467,9 +545,13 @@ class SymGraphTabView(QWidget):
         self.push_preview_table.setColumnWidth(4, 90)
         self.push_preview_table.setColumnWidth(5, 100)
         self.push_preview_table.setMinimumHeight(250)
-        layout.addWidget(self.push_preview_table)
+        self.push_preview_table.setAlternatingRowColors(True)
+        push_symbols_layout.addWidget(self.push_preview_table)
 
+        push_footer_row = QHBoxLayout()
         push_select_row = QHBoxLayout()
+        push_select_row.setContentsMargins(0, 0, 0, 0)
+        push_select_row.setSpacing(6)
         self.push_select_all_button = QPushButton("Select All")
         self.push_select_all_button.clicked.connect(self.on_push_select_all)
         push_select_row.addWidget(self.push_select_all_button)
@@ -479,9 +561,22 @@ class SymGraphTabView(QWidget):
         self.push_invert_selection_button = QPushButton("Invert")
         self.push_invert_selection_button.clicked.connect(self.on_push_invert_selection)
         push_select_row.addWidget(self.push_invert_selection_button)
-        push_select_row.addStretch()
-        layout.addLayout(push_select_row)
+        push_footer_row.addLayout(push_select_row)
+        push_footer_row.addStretch()
+        push_action_row = QHBoxLayout()
+        push_action_row.setContentsMargins(0, 0, 0, 0)
+        push_action_row.setSpacing(6)
+        self.push_button = QPushButton("Publish Selected")
+        self.push_button.clicked.connect(self.push_execute_requested.emit)
+        push_action_row.addWidget(self.push_button)
+        push_footer_row.addLayout(push_action_row)
+        push_symbols_layout.addLayout(push_footer_row)
+        push_preview_tabs.addTab(push_symbols_page, "Symbols")
 
+        push_documents_page = QWidget()
+        push_documents_layout = QVBoxLayout(push_documents_page)
+        push_documents_layout.setContentsMargins(0, 0, 0, 0)
+        push_documents_layout.setSpacing(8)
         self.push_documents_table = QTableWidget()
         self.push_documents_table.setColumnCount(6)
         self.push_documents_table.setHorizontalHeaderLabels(
@@ -501,9 +596,21 @@ class SymGraphTabView(QWidget):
         self.push_documents_table.setColumnWidth(3, 140)
         self.push_documents_table.setColumnWidth(4, 80)
         self.push_documents_table.setColumnWidth(5, 110)
-        self.push_documents_table.setMaximumHeight(150)
-        layout.addWidget(QLabel("Documents"))
-        layout.addWidget(self.push_documents_table)
+        self.push_documents_table.setAlternatingRowColors(True)
+        push_documents_layout.addWidget(self.push_documents_table)
+        push_preview_tabs.addTab(push_documents_page, "Documents")
+
+        push_graph_page = QWidget()
+        push_graph_layout = QVBoxLayout(push_graph_page)
+        push_graph_layout.setContentsMargins(0, 0, 0, 0)
+        push_graph_layout.setSpacing(8)
+        self.push_graph_summary_label = QLabel("No graph data included in this publish preview.")
+        self.push_graph_summary_label.setWordWrap(True)
+        push_graph_layout.addWidget(self.push_graph_summary_label)
+        push_graph_layout.addStretch()
+        push_preview_tabs.addTab(push_graph_page, "Graph")
+
+        layout.addWidget(push_preview_tabs, 1)
 
         self.push_progress_bar = QProgressBar()
         self.push_progress_bar.setVisible(False)
@@ -515,9 +622,22 @@ class SymGraphTabView(QWidget):
         layout.addWidget(self.push_progress_label)
 
         self.push_status_label = QLabel("Status: Ready")
+        self.push_status_label.setWordWrap(True)
         self.push_status_label.setStyleSheet("color: gray;")
         layout.addWidget(self.push_status_label)
         return page
+
+    def _create_disclosure_button(self, label: str) -> QToolButton:
+        button = QToolButton()
+        button.setText(label)
+        button.setCheckable(True)
+        button.setChecked(False)
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        button.setArrowType(Qt.RightArrow)
+        button.toggled.connect(
+            lambda checked, target=button: target.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        )
+        return button
 
     def _create_merge_policy_widget(self):
         widget = QWidget()
@@ -607,10 +727,12 @@ class SymGraphTabView(QWidget):
         except (TypeError, ValueError):
             return 0
 
-    def _set_checkbox_widget(self, table: QTableWidget, row: int, checked: bool):
+    def _set_checkbox_widget(self, table: QTableWidget, row: int, checked: bool, on_change=None):
         checkbox = QCheckBox()
         checkbox.setChecked(checked)
         checkbox.stateChanged.connect(self._update_selection_summaries)
+        if on_change is not None:
+            checkbox.stateChanged.connect(on_change)
         container = QWidget()
         container_layout = QHBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 0, 0)
@@ -653,6 +775,36 @@ class SymGraphTabView(QWidget):
             f"Selected: {selected_push_symbols} symbols / {selected_push_documents} docs"
         )
 
+    @staticmethod
+    def _conflict_key(conflict: ConflictEntry):
+        remote_name = conflict.remote_name or ""
+        local_name = conflict.local_name or ""
+        return (conflict.address, conflict.action.value, remote_name, local_name)
+
+    def _on_conflict_checkbox_changed(self, key, state: int):
+        self._conflict_selection_state[key] = state == Qt.Checked
+
+    def _filtered_conflicts(self) -> List[ConflictEntry]:
+        allowed_actions = set()
+        if self.filter_new_cb.isChecked():
+            allowed_actions.add(ConflictAction.NEW)
+        if self.filter_conflicts_cb.isChecked():
+            allowed_actions.add(ConflictAction.CONFLICT)
+        if self.filter_same_cb.isChecked():
+            allowed_actions.add(ConflictAction.SAME)
+        return [conflict for conflict in self._all_conflicts if conflict.action in allowed_actions]
+
+    def _refresh_conflict_table(self):
+        if not hasattr(self, "conflict_table"):
+            return
+        self.conflict_table.setRowCount(0)
+        for conflict in self._filtered_conflicts():
+            self._add_conflict_row(conflict)
+        self.apply_button.setEnabled(
+            bool(self._all_conflicts) or self._graph_preview is not None or bool(self._pull_preview_documents)
+        )
+        self._update_selection_summaries()
+
     def set_binary_info(self, name: str, sha256: str, local_metadata: Optional[Dict[str, Any]] = None):
         display_name = name or "<no binary loaded>"
         display_sha = sha256 or "<none>"
@@ -678,17 +830,44 @@ class SymGraphTabView(QWidget):
     def set_query_status(self, status: str, found: bool = False):
         self.status_label.setText(status)
         if found:
-            self.status_label.setStyleSheet("color: green; font-weight: bold;")
+            self.status_label.setStyleSheet("color: green;")
+            self.status_badge.setText("Found")
+            self.status_badge.setStyleSheet(
+                "padding: 2px 8px; background: #1f6f3d; color: white; font-weight: 600;"
+            )
         elif "error" in status.lower() or "not found" in status.lower():
             self.status_label.setStyleSheet("color: red;")
+            if "not found" in status.lower():
+                self.status_badge.setText("Not Found")
+                self.status_badge.setStyleSheet(
+                    "padding: 2px 8px; background: #8b2e2e; color: white; font-weight: 600;"
+                )
+            else:
+                self.status_badge.setText("Error")
+                self.status_badge.setStyleSheet(
+                    "padding: 2px 8px; background: #8b2e2e; color: white; font-weight: 600;"
+                )
         else:
             self.status_label.setStyleSheet("color: gray;")
+            self.status_badge.setText("Checking" if "check" in status.lower() else "Unknown")
+            self.status_badge.setStyleSheet(
+                "padding: 2px 8px; background: palette(midlight); color: palette(text);"
+            )
+
+    def reset_query_status(self):
+        self.status_badge.setText("Not checked")
+        self.status_badge.setStyleSheet(
+            "padding: 2px 8px; background: palette(midlight); color: palette(text);"
+        )
+        self.status_label.setText("Use Refresh to check whether this binary already exists in SymGraph.")
+        self.status_label.setStyleSheet("color: gray;")
 
     def set_stats(
         self,
         symbols: int,
         functions: int,
         nodes: int,
+        edges: int,
         last_updated: str,
         revisions: Optional[List[BinaryRevision]] = None,
         latest_revision: Optional[int] = None,
@@ -697,7 +876,7 @@ class SymGraphTabView(QWidget):
         self.symbols_stat.setText(f"Symbols: {symbols:,}")
         self.functions_stat.setText(f"Functions: {functions:,}")
         self.nodes_stat.setText(f"Graph Nodes: {nodes:,}")
-        self.edges_stat.setText("Graph Edges: -")
+        self.edges_stat.setText(f"Graph Edges: {edges:,}")
         self.updated_stat.setText(f"Last Updated: {last_updated or 'Unknown'}")
         self.latest_revision_stat.setText(
             f"Latest Version: v{latest_revision}" if latest_revision else "Latest Version: -"
@@ -739,6 +918,14 @@ class SymGraphTabView(QWidget):
     def get_open_binary_url(self) -> Optional[str]:
         return self._open_binary_url
 
+    def set_auto_refresh_enabled(self, enabled: bool):
+        self.auto_refresh_checkbox.blockSignals(True)
+        self.auto_refresh_checkbox.setChecked(enabled)
+        self.auto_refresh_checkbox.blockSignals(False)
+
+    def is_auto_refresh_enabled(self) -> bool:
+        return self.auto_refresh_checkbox.isChecked()
+
     def set_push_status(self, status: str, success: bool = None):
         self.push_status_label.setText(f"Status: {status}")
         if success is True:
@@ -768,12 +955,29 @@ class SymGraphTabView(QWidget):
         self.summary_graph_version_label.setText(
             f"Version: v{version}" if version is not None else "Version: Latest"
         )
+        if graph_export:
+            communities = self._graph_stats.get("communities", 0)
+            self.fetch_graph_summary_label.setText(
+                f"Graph preview ready from {self.summary_graph_version_label.text().replace('Version: ', '')}: "
+                f"{nodes:,} nodes, {edges:,} edges"
+                + (f", {communities:,} communities" if communities else "")
+                + f". Merge policy: {self._merge_policy.replace('_', ' ')}."
+            )
+        else:
+            self.fetch_graph_summary_label.setText("No graph data loaded.")
 
     def clear_graph_preview_data(self):
         self.set_graph_preview_data(None, {})
 
     def populate_conflicts(self, conflicts: List[ConflictEntry]):
-        self.conflict_table.setRowCount(0)
+        self._all_conflicts = sorted(
+            conflicts,
+            key=lambda item: (
+                0 if item.action == ConflictAction.NEW else 1 if item.action == ConflictAction.CONFLICT else 2,
+                item.address,
+            ),
+        )
+        self._conflict_selection_state = {}
 
         new_count = sum(1 for c in conflicts if c.action == ConflictAction.NEW)
         conflict_count = sum(1 for c in conflicts if c.action == ConflictAction.CONFLICT)
@@ -782,27 +986,12 @@ class SymGraphTabView(QWidget):
         self.summary_conflict_count.setText(f"Conflicts: {conflict_count}")
         self.summary_same_count.setText(f"Same: {same_count}")
 
-        actionable = sorted(
-            [c for c in conflicts if c.action != ConflictAction.SAME],
-            key=lambda item: (0 if item.action == ConflictAction.NEW else 1, item.address)
-        )
-        preselected_ids = {id(item) for item in actionable}
-
-        sorted_conflicts = sorted(
-            conflicts,
-            key=lambda item: (
-                0 if item.action == ConflictAction.NEW else 1 if item.action == ConflictAction.CONFLICT else 2,
-                item.address,
-            ),
-        )
-
-        for conflict in sorted_conflicts:
-            conflict.selected = id(conflict) in preselected_ids if conflict.action != ConflictAction.SAME else False
-            self._add_conflict_row(conflict)
+        for conflict in self._all_conflicts:
+            conflict.selected = conflict.action != ConflictAction.SAME
+            self._conflict_selection_state[self._conflict_key(conflict)] = conflict.selected
 
         self.apply_all_new_button.setEnabled(new_count > 0 or self._graph_preview is not None)
-        self.apply_button.setEnabled(bool(conflicts) or self._graph_preview is not None)
-        self._update_selection_summaries()
+        self._refresh_conflict_table()
 
     def populate_fetch_documents(self, documents: List[Dict[str, Any]]):
         self._pull_preview_documents = list(documents)
@@ -836,7 +1025,14 @@ class SymGraphTabView(QWidget):
     def _add_conflict_row(self, conflict: ConflictEntry):
         row = self.conflict_table.rowCount()
         self.conflict_table.insertRow(row)
-        self._set_checkbox_widget(self.conflict_table, row, conflict.selected)
+        key = self._conflict_key(conflict)
+        checked = self._conflict_selection_state.get(key, conflict.action != ConflictAction.SAME)
+        self._set_checkbox_widget(
+            self.conflict_table,
+            row,
+            checked,
+            on_change=lambda state, conflict_key=key: self._on_conflict_checkbox_changed(conflict_key, state),
+        )
 
         addr_item = QTableWidgetItem(f"0x{conflict.address:x}")
         addr_item.setData(Qt.UserRole, conflict.address)
@@ -896,13 +1092,15 @@ class SymGraphTabView(QWidget):
     def clear_conflicts(self):
         self.conflict_table.setRowCount(0)
         self.fetch_documents_table.setRowCount(0)
+        self._all_conflicts = []
+        self._conflict_selection_state = {}
         self._graph_preview = None
         self._graph_stats = None
         self._pull_preview_documents = []
         self.summary_new_count.setText("New: 0")
         self.summary_conflict_count.setText("Conflicts: 0")
         self.summary_same_count.setText("Same: 0")
-        self.summary_selected_count.setText("Selected: 0")
+        self.summary_selected_count.setText("Selected: 0 symbols / 0 docs")
         self.summary_document_count.setText("Documents: 0")
         self.clear_graph_preview_data()
         self.set_pull_status("", None)
@@ -910,13 +1108,7 @@ class SymGraphTabView(QWidget):
         self.fetch_progress_label.setVisible(False)
 
     def get_all_new_conflicts(self) -> List[ConflictEntry]:
-        results = []
-        for row in range(self.conflict_table.rowCount()):
-            item = self.conflict_table.item(row, 1)
-            conflict = item.data(Qt.UserRole + 1) if item else None
-            if conflict and conflict.action == ConflictAction.NEW:
-                results.append(conflict)
-        return results
+        return [conflict for conflict in self._all_conflicts if conflict.action == ConflictAction.NEW]
 
     def get_selected_conflicts(self) -> List[ConflictEntry]:
         selected = []
@@ -966,9 +1158,11 @@ class SymGraphTabView(QWidget):
             self.query_button,
             self.open_binary_button,
             self.pull_preview_button,
+            self.fetch_reset_button,
             self.apply_button,
             self.apply_all_new_button,
             self.push_preview_button,
+            self.push_reset_button,
             self.push_button,
             self.select_all_button,
             self.deselect_all_button,
@@ -1017,6 +1211,8 @@ class SymGraphTabView(QWidget):
         self.push_documents_count.setText("Documents: 0")
         self.push_graph_nodes_label.setText("Graph Nodes: 0")
         self.push_graph_edges_label.setText("Graph Edges: 0")
+        self.push_graph_summary_label.setText("No graph data included in this publish preview.")
+        self.set_push_status("Ready", success=None)
 
     def set_push_preview(
         self,
@@ -1036,6 +1232,13 @@ class SymGraphTabView(QWidget):
         self.push_documents_count.setText(f"Documents: {len(self._push_preview_documents)}")
         self.push_graph_nodes_label.setText(f"Graph Nodes: {self._push_graph_stats.get('nodes', 0):,}")
         self.push_graph_edges_label.setText(f"Graph Edges: {self._push_graph_stats.get('edges', 0):,}")
+        if graph_data:
+            self.push_graph_summary_label.setText(
+                f"Publish preview includes {self._push_graph_stats.get('nodes', 0):,} graph nodes and "
+                f"{self._push_graph_stats.get('edges', 0):,} graph edges."
+            )
+        else:
+            self.push_graph_summary_label.setText("No graph data included in this publish preview.")
 
         for index, symbol in enumerate(symbols):
             row = self.push_preview_table.rowCount()

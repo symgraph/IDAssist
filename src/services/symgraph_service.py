@@ -575,6 +575,53 @@ class SymGraphService:
         except httpx.RequestError as e:
             raise SymGraphNetworkError(f"Network error: {str(e)}")
 
+    async def update_binary_metadata(
+        self,
+        sha256: str,
+        metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update top-level binary metadata for an existing SymGraph binary."""
+        self._check_httpx()
+        self._check_auth()
+
+        payload: Dict[str, Any] = {}
+        for key, value in (metadata or {}).items():
+            if value is None:
+                continue
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if not cleaned:
+                    continue
+                payload[key] = cleaned
+                continue
+            payload[key] = value
+
+        if not payload:
+            return {}
+
+        url = f"{self.base_url}/api/v1/binaries/{sha256}"
+        log.log_debug(f"Updating binary metadata for {sha256[:16]}... keys={sorted(payload.keys())}")
+
+        try:
+            async with httpx.AsyncClient(**self._client_kwargs(60.0)) as client:
+                response = await client.patch(
+                    url,
+                    headers=self._get_headers(authenticated=True),
+                    json=payload
+                )
+
+                if response.status_code == 200:
+                    return response.json() if response.content else {}
+                elif response.status_code == 401:
+                    raise SymGraphAuthError("Invalid API key")
+                else:
+                    self._raise_api_error("updating binary metadata", response)
+
+        except httpx.TimeoutException:
+            raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
+        except httpx.RequestError as e:
+            raise SymGraphNetworkError(f"Network error: {str(e)}")
+
     async def push_symbols_bulk(
         self,
         sha256: str,

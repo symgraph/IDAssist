@@ -210,6 +210,11 @@ class SettingsService:
                 'value': '',
                 'type': 'string',
                 'category': 'symgraph'
+            },
+            'symgraph_auto_refresh': {
+                'value': '0',
+                'type': 'boolean',
+                'category': 'symgraph'
             }
         }
 
@@ -854,6 +859,14 @@ class SettingsService:
         """Check if a SymGraph API key is configured"""
         key = self.get_symgraph_api_key()
         return bool(key and key.strip())
+
+    def is_symgraph_auto_refresh_enabled(self) -> bool:
+        """Check if SymGraph status auto-refresh is enabled."""
+        return self.get_setting('symgraph_auto_refresh', False)
+
+    def set_symgraph_auto_refresh_enabled(self, enabled: bool) -> bool:
+        """Persist the SymGraph status auto-refresh setting."""
+        return self.set_setting('symgraph_auto_refresh', enabled, 'symgraph')
 
     def close(self):
         """Close database connections (for cleanup)"""

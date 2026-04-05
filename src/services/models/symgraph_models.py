@@ -76,6 +76,7 @@ class BinaryStats:
     symbol_count: int = 0
     function_count: int = 0
     graph_node_count: int = 0
+    graph_edge_count: int = 0
     query_count: int = 0
     last_queried_at: Optional[str] = None
 
@@ -95,6 +96,7 @@ class BinaryStats:
             symbol_count=stats_data.get('symbol_count', 0),
             function_count=stats_data.get('function_count', 0),
             graph_node_count=stats_data.get('graph_node_count', 0),
+            graph_edge_count=stats_data.get('graph_edge_count', 0),
             query_count=stats_data.get('query_count', 0),
             last_queried_at=last_queried
         )
@@ -105,6 +107,7 @@ class BinaryStats:
             'symbol_count': self.symbol_count,
             'function_count': self.function_count,
             'graph_node_count': self.graph_node_count,
+            'graph_edge_count': self.graph_edge_count,
             'query_count': self.query_count,
             'last_queried_at': self.last_queried_at
         }
