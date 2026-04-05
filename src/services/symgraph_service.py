@@ -340,12 +340,12 @@ class SymGraphService:
                     if not isinstance(revisions, list):
                         return []
                     return [BinaryRevision.from_dict(item) for item in revisions]
-                elif response.status_code in (401, 403):
+                elif response.status_code == 401:
                     raise SymGraphAuthError("Invalid API key")
                 elif response.status_code == 404:
                     return []
                 else:
-                    raise SymGraphAPIError(f"Error listing binary versions: {response.status_code}", response.status_code)
+                    self._raise_api_error("listing binary versions", response)
 
         except httpx.TimeoutException:
             raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
@@ -445,7 +445,7 @@ class SymGraphService:
                 elif response.status_code == 404:
                     return []
                 else:
-                    raise SymGraphAPIError(f"Error getting symbols: {response.status_code}", response.status_code)
+                    self._raise_api_error("getting symbols", response)
 
         except httpx.TimeoutException:
             raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
@@ -830,7 +830,7 @@ class SymGraphService:
                 elif response.status_code == 404:
                     return None
                 else:
-                    raise SymGraphAPIError(f"Error exporting graph: {response.status_code}", response.status_code)
+                    self._raise_api_error("exporting graph", response)
 
         except httpx.TimeoutException:
             raise SymGraphNetworkError(f"Timeout connecting to {self.base_url}")
