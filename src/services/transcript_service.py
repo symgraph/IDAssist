@@ -234,21 +234,31 @@ class TranscriptService:
                                  source_message_order=source_message_order)
 
     def append_tool_requested(self, binary_hash: str, chat_id: str, correlation_id: str,
-                              tool_name: str, tool_source: str, arguments: dict):
+                              tool_name: str, tool_source: str, arguments: dict,
+                              metadata_extra: Optional[Dict] = None):
+        metadata = {"tool_name": tool_name, "tool_source": tool_source, "arguments": arguments}
+        if metadata_extra:
+            metadata.update(metadata_extra)
         return self.append_event(binary_hash, chat_id, TranscriptEventKind.TOOL_CALL_REQUESTED, "tool", None,
-                                 correlation_id=correlation_id,
-                                 metadata={"tool_name": tool_name, "tool_source": tool_source, "arguments": arguments})
+                                 correlation_id=correlation_id, metadata=metadata)
 
-    def append_tool_started(self, binary_hash: str, chat_id: str, correlation_id: str, tool_name: str, tool_source: str):
+    def append_tool_started(self, binary_hash: str, chat_id: str, correlation_id: str,
+                            tool_name: str, tool_source: str, metadata_extra: Optional[Dict] = None):
+        metadata = {"tool_name": tool_name, "tool_source": tool_source}
+        if metadata_extra:
+            metadata.update(metadata_extra)
         return self.append_event(binary_hash, chat_id, TranscriptEventKind.TOOL_CALL_STARTED, "tool", None,
-                                 correlation_id=correlation_id,
-                                 metadata={"tool_name": tool_name, "tool_source": tool_source})
+                                 correlation_id=correlation_id, metadata=metadata)
 
     def append_tool_completed(self, binary_hash: str, chat_id: str, correlation_id: str,
-                              tool_name: str, tool_source: str, result_text: str, success: bool = True):
+                              tool_name: str, tool_source: str, result_text: str, success: bool = True,
+                              metadata_extra: Optional[Dict] = None):
         kind = TranscriptEventKind.TOOL_CALL_COMPLETED if success else TranscriptEventKind.TOOL_CALL_FAILED
+        metadata = {"tool_name": tool_name, "tool_source": tool_source}
+        if metadata_extra:
+            metadata.update(metadata_extra)
         return self.append_event(binary_hash, chat_id, kind, "tool", result_text, correlation_id=correlation_id,
-                                 metadata={"tool_name": tool_name, "tool_source": tool_source})
+                                 metadata=metadata)
 
     def append_approval_requested(self, binary_hash: str, chat_id: str, correlation_id: str, request_id: str,
                                   tool_name: str, tool_source: str, risk_tier: str, arguments: dict):
@@ -266,23 +276,33 @@ class TranscriptService:
                                            "risk_tier": risk_tier, "scope": scope})
 
     def append_todo_snapshot(self, binary_hash: str, chat_id: str, summary: str, todos: list,
-                             iteration: Optional[int] = None, counts: Optional[Dict] = None):
+                             iteration: Optional[int] = None, counts: Optional[Dict] = None,
+                             metadata_extra: Optional[Dict] = None):
         metadata = {"summary": summary, "todos": todos, "tasks": todos}
         if iteration is not None:
             metadata["iteration"] = iteration
         if counts:
             metadata.update(counts)
+        if metadata_extra:
+            metadata.update(metadata_extra)
         return self.append_event(binary_hash, chat_id, TranscriptEventKind.TODO_UPDATED, "agent", summary,
                                  metadata=metadata)
 
-    def append_finding(self, binary_hash: str, chat_id: str, finding: str, iteration: Optional[int] = None):
-        metadata = {"iteration": iteration} if iteration is not None else None
+    def append_finding(self, binary_hash: str, chat_id: str, finding: str, iteration: Optional[int] = None,
+                       metadata_extra: Optional[Dict] = None):
+        metadata = {"iteration": iteration} if iteration is not None else {}
+        if metadata_extra:
+            metadata.update(metadata_extra)
         return self.append_event(binary_hash, chat_id, TranscriptEventKind.FINDING_ADDED, "agent", finding,
-                                 metadata=metadata)
+                                 metadata=metadata or None)
 
-    def append_iteration_notice(self, binary_hash: str, chat_id: str, content: str, metadata: Optional[Dict] = None):
+    def append_iteration_notice(self, binary_hash: str, chat_id: str, content: str,
+                                metadata: Optional[Dict] = None, metadata_extra: Optional[Dict] = None):
+        merged = dict(metadata or {})
+        if metadata_extra:
+            merged.update(metadata_extra)
         return self.append_event(binary_hash, chat_id, TranscriptEventKind.ITERATION_NOTICE, "agent", content,
-                                 metadata=metadata)
+                                 metadata=merged or None)
 
     def append_context_compacted(self, binary_hash: str, chat_id: str, summary: str, metadata: Dict):
         return self.append_event(binary_hash, chat_id, TranscriptEventKind.CONTEXT_COMPACTED, "system", summary,
@@ -334,3 +354,101 @@ class TranscriptService:
                 return ArtifactRef(artifact_id=artifact_id, file_path=row[0], preview_text=row[1], mime_type=row[2])
             finally:
                 conn.close()
+
+    def build_react_continuation_bridge(self, binary_hash: str, chat_id: str) -> Optional[Dict]:
+        events = self.get_transcript_events(binary_hash, chat_id)
+        if not events:
+            return None
+
+        final_event = None
+        final_metadata = None
+        for event in reversed(events):
+            if event.event_kind != TranscriptEventKind.ASSISTANT_MESSAGE:
+                continue
+            metadata = event.metadata or {}
+            if metadata.get("react_final"):
+                final_event = event
+                final_metadata = metadata
+                break
+        if not final_event or not final_metadata:
+            return None
+
+        react_run_id = final_metadata.get("react_run_id")
+        if not react_run_id:
+            return None
+
+        objective = final_metadata.get("react_objective")
+        status = final_metadata.get("react_status")
+        findings: List[str] = []
+        seen = set()
+        latest_todo_metadata = None
+
+        for event in events:
+            metadata = event.metadata or {}
+            if metadata.get("react_run_id") != react_run_id:
+                continue
+            if event.event_kind == TranscriptEventKind.FINDING_ADDED:
+                finding = self._normalize_bridge_text(event.content_text, 320)
+                if finding and finding not in seen:
+                    seen.add(finding)
+                    findings.append(finding)
+            elif event.event_kind == TranscriptEventKind.TODO_UPDATED:
+                latest_todo_metadata = metadata
+
+        if len(findings) > 6:
+            findings = findings[-6:]
+
+        pending_count = int((latest_todo_metadata or {}).get("pending_count") or 0)
+        active_count = int((latest_todo_metadata or {}).get("in_progress_count") or 0)
+        active_todo = self._extract_active_todo(latest_todo_metadata or {})
+
+        lines = ["## Prior ReAct Investigation Context", ""]
+        if objective:
+            lines.append(f"- Objective: {objective}")
+        if status:
+            lines.append(f"- Status: {status}")
+
+        conclusion = self._normalize_bridge_text(final_event.content_text, 900)
+        if conclusion:
+            lines.extend(["", "Conclusion:", conclusion])
+
+        if findings:
+            lines.extend(["", "Key findings:"])
+            lines.extend(f"- {finding}" for finding in findings)
+
+        if (active_count > 0 or pending_count > 0) and active_todo:
+            lines.extend(["", "Open investigation items:", f"- {active_todo}"])
+
+        return {
+            "react_run_id": react_run_id,
+            "markdown": "\n".join(lines).strip(),
+            "finding_count": len(findings),
+            "pending_count": pending_count,
+            "status": status,
+        }
+
+    @staticmethod
+    def _normalize_bridge_text(value: Optional[str], max_chars: int) -> str:
+        if not value:
+            return ""
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if len(normalized) > max_chars:
+            normalized = normalized[: max(0, max_chars - 3)].rstrip() + "..."
+        return normalized
+
+    @staticmethod
+    def _extract_active_todo(metadata: Dict) -> Optional[str]:
+        todos = metadata.get("todos") or metadata.get("tasks") or []
+        pending = None
+        for todo in todos:
+            if not isinstance(todo, dict):
+                continue
+            task = (todo.get("task") or "").strip()
+            status = str(todo.get("status") or "").upper()
+            if not task:
+                continue
+            if status == "IN_PROGRESS":
+                return task
+            if pending is None and status == "PENDING":
+                pending = task
+        return pending
