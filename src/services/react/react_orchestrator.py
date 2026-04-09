@@ -19,6 +19,7 @@ from ..models.llm_models import ToolCall, ToolResult, ChatMessage, ChatRequest, 
 from ..models.context_models import ContextWindowConfig
 from ..context_window_manager import ContextWindowManager
 from ..llm_providers.base_provider import NetworkError
+from ..models.transcript_models import ToolChoiceMode
 
 from src.ida_compat import log
 
@@ -78,6 +79,7 @@ class ReActOrchestrator:
         self.on_iteration_start: Optional[Callable[[int, str], None]] = None
         self.on_iteration_complete: Optional[Callable[[int, str], None]] = None
         self.on_content: Optional[Callable[[str], None]] = None
+        self.on_tool_event: Optional[Callable[[dict], None]] = None
 
         log.log_info("ReActOrchestrator initialized")
 
@@ -242,16 +244,8 @@ class ReActOrchestrator:
 
         prompt = ReActPrompts.get_planning_prompt(objective, initial_context)
 
-        # Emit header before streaming
-        if self.on_content:
-            self.on_content("**Investigation Plan:**\n\n")
-
-        # Call LLM for planning (content streams during this call)
-        plan_response = await self._call_llm_no_tools(prompt)
-
-        # Emit footer after streaming
-        if self.on_content:
-            self.on_content("\n\n---\n\n")
+        # Planning is rendered as transcript task snapshots, not assistant streaming.
+        plan_response = await self._call_llm_no_tools(prompt, emit_content=False)
 
         # Parse response into todos
         self.todo_manager.initialize_from_llm_response(plan_response)
@@ -282,17 +276,13 @@ class ReActOrchestrator:
         if self.on_progress:
             self.on_progress(f"Investigating... (iteration {iteration})", iteration)
 
-        # Emit iteration header before streaming
-        if self.on_content:
-            self.on_content(f"\n\n**Iteration {iteration}:**\n\n")
-
         # Multi-turn tool calling loop - continue until LLM says "stop"
         max_tool_rounds = 10  # Prevent infinite loops
         tool_round = 0
         final_response = ""
 
         # First call with the investigation prompt
-        response_text, tool_calls = await self._call_llm_with_tools(prompt)
+        response_text, tool_calls = await self._call_llm_with_tools(prompt, emit_content=False)
         final_response = response_text
 
         # Tool calling loop
@@ -311,10 +301,6 @@ class ReActOrchestrator:
 
             tool_round += 1
             log.log_info(f"ReAct: Tool round {tool_round} with {len(tool_calls)} tool calls")
-
-            # Add spacing before tool execution
-            if self.on_content:
-                self.on_content("\n\n")
 
             # Execute tools
             tool_results = await self._execute_tools(tool_calls, iteration)
@@ -383,7 +369,7 @@ class ReActOrchestrator:
 
             # Continue the conversation - LLM can now make more tool calls or provide final response
             # No explicit prompt needed - LLM sees tool results in history and continues
-            response_text, tool_calls = await self._call_llm_with_tools("")
+            response_text, tool_calls = await self._call_llm_with_tools("", emit_content=False)
             final_response = response_text
 
         if tool_round >= max_tool_rounds:
@@ -417,12 +403,8 @@ class ReActOrchestrator:
             self.findings.format_for_prompt()
         )
 
-        # Emit reflection header
-        if self.on_content:
-            self.on_content("\n\n**Self-Reflection:**\n\n")
-
-        # Call LLM and emit reflection content
-        response = await self._call_llm_no_tools(prompt, emit_content=True)
+        # Reflection updates the task list and notices, not the assistant stream.
+        response = await self._call_llm_no_tools(prompt, emit_content=False)
 
         # Parse reflection response
         new_tasks, tasks_to_remove, is_ready = self._parse_reflection_response(response)
@@ -443,19 +425,6 @@ class ReActOrchestrator:
                 # Emit updated todo list
                 if self.on_todos_updated:
                     self.on_todos_updated(self.todo_manager.format_for_prompt())
-
-                # Emit plan update summary
-                if self.on_content:
-                    summary_parts = []
-                    if new_tasks:
-                        summary_parts.append(f"Added {len(new_tasks)} new task(s)")
-                    if tasks_to_remove:
-                        summary_parts.append(f"Removed {len(tasks_to_remove)} task(s)")
-                    self.on_content(f"\n\n*Plan updated: {', '.join(summary_parts)}*\n\n")
-
-        # Emit separator after reflection
-        if self.on_content:
-            self.on_content("\n---\n")
 
         if is_ready:
             log.log_info("ReAct: Self-reflection says READY to synthesize")
@@ -515,12 +484,8 @@ class ReActOrchestrator:
             self.findings.format_detailed()
         )
 
-        # Emit header before synthesis
-        if self.on_content:
-            self.on_content("\n\n---\n\n**Final Answer:**\n\n")
-
         # Stream the synthesis (content streams during this call)
-        final_answer = await self._call_llm_no_tools(prompt)
+        final_answer = await self._call_llm_no_tools(prompt, emit_content=True)
 
         return final_answer
 
@@ -624,7 +589,7 @@ class ReActOrchestrator:
         # Should not reach here, but just in case
         raise last_error
 
-    async def _call_llm_with_tools(self, prompt: str = "") -> tuple:
+    async def _call_llm_with_tools(self, prompt: str = "", emit_content: bool = True) -> tuple:
         """
         Call LLM with tools enabled.
 
@@ -664,7 +629,8 @@ class ReActOrchestrator:
             max_tokens=getattr(self.llm_provider, 'max_tokens', 4096),
             temperature=0.7,
             stream=True,
-            tools=self.mcp_tools if self.mcp_tools else None
+            tools=self.mcp_tools if self.mcp_tools else None,
+            tool_choice=ToolChoiceMode.REQUIRED_INITIAL.to_openai_tool_choice(managed_history),
         )
 
         # Retry loop for transient network errors
@@ -679,8 +645,7 @@ class ReActOrchestrator:
                 async for chunk in self.llm_provider.chat_completion_stream(request):
                     if chunk.content:
                         accumulated += chunk.content
-                        # Emit content chunks for UI updates
-                        if self.on_content:
+                        if emit_content and self.on_content:
                             self.on_content(chunk.content)
 
                     # Tool calls come in the final chunk
@@ -710,7 +675,7 @@ class ReActOrchestrator:
                         f"ReAct: Network error (attempt {attempt + 1}/{self.config.max_retries + 1}), "
                         f"retrying in {delay}s: {e}"
                     )
-                    if self.on_content:
+                    if emit_content and self.on_content:
                         self.on_content(f"\n\n*Network timeout, retrying in {delay:.0f}s...*\n\n")
                     await asyncio.sleep(delay)
                 else:
@@ -720,7 +685,7 @@ class ReActOrchestrator:
                         f"The LLM request timed out after {self.config.max_retries + 1} attempts. "
                         "Please try a simpler query or try again later."
                     )
-                    if self.on_content:
+                    if emit_content and self.on_content:
                         self.on_content(f"\n\n*{error_msg}*\n\n")
                     raise
 
@@ -737,15 +702,52 @@ class ReActOrchestrator:
 
         log.log_info(f"ReAct: Executing {len(tool_calls)} tool calls in iteration {iteration}")
 
-        if self.on_content:
-            tool_names = [tc.name for tc in tool_calls]
-            self.on_content(f"*Executing tools: {', '.join(tool_names)}*\n\n")
+        if self.on_tool_event:
+            for tool_call in tool_calls:
+                self.on_tool_event({
+                    "phase": "requested",
+                    "tool_call_id": tool_call.id,
+                    "tool_name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                })
+                self.on_tool_event({
+                    "phase": "started",
+                    "tool_call_id": tool_call.id,
+                    "tool_name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                })
 
         try:
             results = await self.mcp_orchestrator.execute_tool_calls(tool_calls)
+            if self.on_tool_event:
+                result_map = {result.tool_call_id: result for result in results}
+                for tool_call in tool_calls:
+                    result = result_map.get(tool_call.id)
+                    if result and not result.error:
+                        self.on_tool_event({
+                            "phase": "completed",
+                            "tool_call_id": tool_call.id,
+                            "tool_name": tool_call.name,
+                            "content": result.content,
+                        })
+                    else:
+                        self.on_tool_event({
+                            "phase": "failed",
+                            "tool_call_id": tool_call.id,
+                            "tool_name": tool_call.name,
+                            "error": result.error if result else "No result returned",
+                        })
             return results
         except Exception as e:
             log.log_error(f"ReAct: Tool execution failed: {e}")
+            if self.on_tool_event:
+                for tool_call in tool_calls:
+                    self.on_tool_event({
+                        "phase": "failed",
+                        "tool_call_id": tool_call.id,
+                        "tool_name": tool_call.name,
+                        "error": str(e),
+                    })
             # Return error results for all tool calls
             return [
                 ToolResult(

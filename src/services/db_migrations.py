@@ -83,6 +83,7 @@ class DatabaseMigrations:
                 (7, DatabaseMigrations._migration_007_llm_renames),
                 (8, DatabaseMigrations._migration_008_chat_document_metadata),
                 (9, DatabaseMigrations._migration_009_graph_node_code_fields),
+                (10, DatabaseMigrations._migration_010_transcript_and_approvals),
             ]
 
             for version, migration_func in migrations:
@@ -629,6 +630,69 @@ class DatabaseMigrations:
             return True
         except Exception as e:
             log.log_error(f"Migration 009 failed: {e}")
+            return False
+
+    @staticmethod
+    def _migration_010_transcript_and_approvals(db_path: str) -> bool:
+        """Migration 010: Add transcript, artifact, and approval tables."""
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS BNChatTranscriptEvents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    binary_hash TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    event_index INTEGER NOT NULL,
+                    event_kind TEXT NOT NULL,
+                    correlation_id TEXT,
+                    actor_role TEXT,
+                    content_text TEXT,
+                    metadata TEXT,
+                    artifact_id TEXT,
+                    source_message_id INTEGER,
+                    source_message_order INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(binary_hash, chat_id, event_index)
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_transcript_lookup ON BNChatTranscriptEvents(binary_hash, chat_id, event_index)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_transcript_kind ON BNChatTranscriptEvents(event_kind)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_transcript_source_link ON BNChatTranscriptEvents(binary_hash, chat_id, source_message_id, source_message_order)')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS BNChatArtifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    binary_hash TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    preview_text TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_artifacts_lookup ON BNChatArtifacts(binary_hash, chat_id)')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS BNChatApprovalGrants (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    risk_tier TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(chat_id, tool_name, scope)
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_approval_grants_lookup ON BNChatApprovalGrants(chat_id, tool_name, scope)')
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            log.log_error(f"Migration 010 failed: {e}")
             return False
 
 

@@ -79,6 +79,9 @@ class QueryTabView(QWidget):
     rag_enabled_changed = Signal(bool)
     mcp_enabled_changed = Signal(bool)
     agentic_enabled_changed = Signal(bool)
+    accept_all_tools_changed = Signal(bool)
+    approval_decision_requested = Signal(str)
+    transcript_link_clicked = Signal(str)
     # RLHF feedback signals
     rlhf_feedback_requested = Signal(bool)  # True for upvote, False for downvote
 
@@ -86,6 +89,7 @@ class QueryTabView(QWidget):
         super().__init__()
         self.is_edit_mode = False
         self.markdown_content = "No chat selected. Click 'New' to start a conversation."
+        self._html_content = ""
         self.chat_counter = 0
         self.current_chat_id = None
         self.query_running = False
@@ -105,6 +109,8 @@ class QueryTabView(QWidget):
         # Main text widget - HTML browser/Markdown editor
         self.create_main_text_widget()
 
+        self.create_approval_panel()
+
         # History table
         self.create_history_table()
 
@@ -114,11 +120,12 @@ class QueryTabView(QWidget):
         # Add widgets to splitter
         self.splitter.addWidget(self.query_browser)
         self.splitter.addWidget(self.query_editor)
+        self.splitter.addWidget(self.approval_panel)
         self.splitter.addWidget(self.history_table)
         self.splitter.addWidget(self.input_widget)
 
         # Set initial splitter sizes (give more space to main text and input)
-        self.splitter.setSizes([400, 400, 80, 100])
+        self.splitter.setSizes([400, 400, 0, 80, 100])
 
         layout.addWidget(self.splitter)
 
@@ -139,6 +146,11 @@ class QueryTabView(QWidget):
         self.current_offset_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.current_offset_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
+        self.status_label = QLabel("Model: No provider / No model | No active context window data")
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.status_label.setStyleSheet("font-size: 11px; color: #9fb0bf;")
+
         # RAG and MCP checkboxes
         self.rag_checkbox = QCheckBox("RAG")
         self.rag_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -157,6 +169,11 @@ class QueryTabView(QWidget):
         self.agentic_checkbox.setToolTip("Enable ReAct autonomous agent for complex investigations")
         self.agentic_checkbox.toggled.connect(self.agentic_enabled_changed.emit)
 
+        self.accept_all_tools_checkbox = QCheckBox("Accept All Tools")
+        self.accept_all_tools_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.accept_all_tools_checkbox.setChecked(False)
+        self.accept_all_tools_checkbox.toggled.connect(self.accept_all_tools_changed.emit)
+
         # Size-constrained Edit button
         self.edit_save_button = QPushButton("Edit")
         self.edit_save_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -164,13 +181,19 @@ class QueryTabView(QWidget):
 
         top_row.addWidget(offset_label)
         top_row.addWidget(self.current_offset_label)
-        top_row.addStretch()  # Push checkboxes and button to the right
+        top_row.addStretch()
         top_row.addWidget(self.rag_checkbox)
         top_row.addWidget(self.mcp_checkbox)
         top_row.addWidget(self.agentic_checkbox)
+        top_row.addWidget(self.accept_all_tools_checkbox)
         top_row.addWidget(self.edit_save_button)
 
         parent_layout.addLayout(top_row)
+
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.addWidget(self.status_label, 1)
+        parent_layout.addLayout(status_row)
 
     def create_main_text_widget(self):
         # HTML browser for read-only mode (uses StreamingMarkdownBrowser for responsive streaming)
@@ -197,6 +220,49 @@ class QueryTabView(QWidget):
         esc_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self.query_editor)
         esc_shortcut.setContext(Qt.WidgetShortcut)
         esc_shortcut.activated.connect(self.cancel_edit_mode)
+
+    def create_approval_panel(self):
+        self.approval_panel = QWidget()
+        self.approval_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.approval_panel.setStyleSheet(
+            "QWidget { border: 1px solid #d9534f; background: #3a4046; }"
+            "QLabel { border: none; color: #d8dee9; }"
+            "QPlainTextEdit { border: none; background: #2f3439; color: #d8dee9; padding: 4px; }"
+            "QPushButton { margin: 3px; padding: 3px 8px; }"
+        )
+        panel_layout = QVBoxLayout()
+        panel_layout.setContentsMargins(6, 5, 6, 5)
+        panel_layout.setSpacing(4)
+
+        self.approval_summary_label = QLabel("")
+        self.approval_summary_label.setWordWrap(True)
+        self.approval_summary_label.setStyleSheet("font-size: 11px;")
+        panel_layout.addWidget(self.approval_summary_label)
+
+        self.approval_args_preview = QPlainTextEdit()
+        self.approval_args_preview.setReadOnly(True)
+        self.approval_args_preview.setMaximumBlockCount(200)
+        self.approval_args_preview.setMaximumHeight(72)
+        self.approval_args_preview.setStyleSheet("font-family: monospace; font-size: 11px;")
+        panel_layout.addWidget(self.approval_args_preview)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(4)
+        self.allow_once_button = QPushButton("Allow Once")
+        self.allow_session_button = QPushButton("Allow for Session")
+        self.deny_button = QPushButton("Deny")
+        self.allow_once_button.clicked.connect(lambda: self.approval_decision_requested.emit("allow_once"))
+        self.allow_session_button.clicked.connect(lambda: self.approval_decision_requested.emit("allow_session"))
+        self.deny_button.clicked.connect(lambda: self.approval_decision_requested.emit("deny"))
+        button_row.addWidget(self.allow_once_button)
+        button_row.addWidget(self.allow_session_button)
+        button_row.addWidget(self.deny_button)
+        button_row.addStretch()
+        panel_layout.addLayout(button_row)
+
+        self.approval_panel.setLayout(panel_layout)
+        self.approval_panel.hide()
 
     def create_history_table(self):
         self.history_table = QTableWidget()
@@ -275,8 +341,9 @@ class QueryTabView(QWidget):
 
         # Save history and input panel sizes before the swap
         old_sizes = self.splitter.sizes()
-        history_size = old_sizes[2] if len(old_sizes) >= 3 else 80
-        input_size = old_sizes[3] if len(old_sizes) >= 4 else 100
+        approval_size = old_sizes[2] if len(old_sizes) >= 3 else 0
+        history_size = old_sizes[3] if len(old_sizes) >= 4 else 80
+        input_size = old_sizes[4] if len(old_sizes) >= 5 else 100
 
         if self.is_edit_mode:
             self.query_browser.hide()
@@ -295,11 +362,11 @@ class QueryTabView(QWidget):
 
         # Restore: give all remaining space to the active text widget
         total = sum(self.splitter.sizes())
-        active_size = total - history_size - input_size
+        active_size = total - approval_size - history_size - input_size
         if self.is_edit_mode:
-            self.splitter.setSizes([0, active_size, history_size, input_size])
+            self.splitter.setSizes([0, active_size, approval_size, history_size, input_size])
         else:
-            self.splitter.setSizes([active_size, 0, history_size, input_size])
+            self.splitter.setSizes([active_size, 0, approval_size, history_size, input_size])
 
         self.edit_mode_changed.emit(self.is_edit_mode)
 
@@ -309,14 +376,15 @@ class QueryTabView(QWidget):
             return
         self.is_edit_mode = False
         old_sizes = self.splitter.sizes()
-        history_size = old_sizes[2] if len(old_sizes) >= 3 else 80
-        input_size = old_sizes[3] if len(old_sizes) >= 4 else 100
+        approval_size = old_sizes[2] if len(old_sizes) >= 3 else 0
+        history_size = old_sizes[3] if len(old_sizes) >= 4 else 80
+        input_size = old_sizes[4] if len(old_sizes) >= 5 else 100
         self.query_editor.hide()
         self.query_browser.show()
         self.edit_save_button.setText("Edit")
         total = sum(self.splitter.sizes())
-        active_size = total - history_size - input_size
-        self.splitter.setSizes([active_size, 0, history_size, input_size])
+        active_size = total - approval_size - history_size - input_size
+        self.splitter.setSizes([active_size, 0, approval_size, history_size, input_size])
 
     def on_submit_clicked(self):
         """Handle submit button click - toggles between submit and stop"""
@@ -466,6 +534,10 @@ class QueryTabView(QWidget):
             self.edit_save_button.setEnabled(True)
             self.edit_save_button.setToolTip("Toggle edit mode")
 
+    def set_edit_available(self, available: bool):
+        if not self.query_running:
+            self.edit_save_button.setEnabled(available)
+
     def set_chat_content(self, markdown_text):
         """Set the chat content (in Markdown format)"""
         self.markdown_content = markdown_text
@@ -516,6 +588,91 @@ class QueryTabView(QWidget):
         if self.is_edit_mode:
             return self.query_editor.toPlainText()
         return self.markdown_content
+
+    def set_chat_html(self, html_text: str, markdown_source: str = ""):
+        new_html = html_text or ""
+        new_markdown = markdown_source or self.markdown_content
+
+        if self.is_edit_mode:
+            self._html_content = new_html
+            self.markdown_content = new_markdown
+            self.query_editor.setPlainText(markdown_source or self.query_editor.toPlainText())
+            return
+
+        if new_html == self._html_content and new_markdown == self.markdown_content:
+            return
+
+        self._html_content = new_html
+        self.markdown_content = new_markdown
+
+        scrollbar = self.query_browser.verticalScrollBar()
+        old_value = scrollbar.value() if scrollbar else 0
+        should_auto_scroll = self._auto_scroll_enabled
+        self._programmatic_scroll = True
+        self.query_browser.set_markdown_source(markdown_source or "")
+        self.query_browser.setHtml(self._html_content)
+
+        from ..qt_compat import QTimer
+        if should_auto_scroll:
+            def scroll_to_bottom():
+                try:
+                    if scrollbar:
+                        scrollbar.setValue(scrollbar.maximum())
+                except RuntimeError:
+                    pass
+                self._programmatic_scroll = False
+            QTimer.singleShot(0, scroll_to_bottom)
+        else:
+            def restore_scroll():
+                try:
+                    if scrollbar:
+                        scrollbar.setValue(old_value)
+                except RuntimeError:
+                    pass
+                self._programmatic_scroll = False
+            QTimer.singleShot(0, restore_scroll)
+
+    def set_context_status(self, text: str):
+        self.status_label.setText(text or "Model: No provider / No model | No active context window data")
+
+    def set_accept_all_tools_enabled(self, enabled: bool):
+        self.accept_all_tools_checkbox.setEnabled(enabled)
+
+    def set_accept_all_tools_checked(self, checked: bool):
+        blocked = self.accept_all_tools_checkbox.blockSignals(True)
+        self.accept_all_tools_checkbox.setChecked(checked)
+        self.accept_all_tools_checkbox.blockSignals(blocked)
+
+    def set_pending_approval(self, approval_request):
+        if not approval_request:
+            self.approval_panel.hide()
+            self.approval_summary_label.setText("")
+            self.approval_args_preview.setPlainText("")
+            self._restore_splitter_after_approval_change()
+            return
+
+        summary = (
+            f"Approval required: {approval_request.tool_name} "
+            f"[{approval_request.risk_tier}] from {approval_request.tool_source}"
+        )
+        self.approval_summary_label.setText(summary)
+        self.approval_args_preview.setPlainText(approval_request.args_preview or "{}")
+        self.approval_panel.show()
+        self._restore_splitter_after_approval_change(approval_visible=True)
+
+    def _restore_splitter_after_approval_change(self, approval_visible: bool = False):
+        sizes = self.splitter.sizes()
+        if len(sizes) < 5:
+            return
+        approval_size = 96 if approval_visible else 0
+        remaining = sum(sizes) - approval_size
+        active_index = 1 if self.is_edit_mode else 0
+        history_size = sizes[3]
+        input_size = sizes[4]
+        active_size = max(0, remaining - history_size - input_size)
+        updated = [0, 0, approval_size, history_size, input_size]
+        updated[active_index] = active_size
+        self.splitter.setSizes(updated)
 
     def create_chat_type_combo(self, chat_id: int, chat_type: str):
         from ..qt_compat import QComboBox
@@ -606,7 +763,7 @@ class QueryTabView(QWidget):
     def begin_streaming(self, chat_history_html: str) -> None:
         """Begin streaming session by setting static chat history."""
         if not self.is_edit_mode:
-            self.query_browser.setHtml(chat_history_html)
+            self.set_chat_html(chat_history_html)
             self.query_browser._committed_html = chat_history_html
             self.query_browser._pending_start = self.query_browser.document().characterCount()
             self._auto_scroll_enabled = True
@@ -648,3 +805,5 @@ class QueryTabView(QWidget):
             self.rlhf_feedback_requested.emit(True)
         elif url_str == "rlhf://downvote":
             self.rlhf_feedback_requested.emit(False)
+        elif ":" in url_str:
+            self.transcript_link_clicked.emit(url_str)

@@ -34,6 +34,7 @@ except ImportError:
 
 # Callback registry for document chat creation
 _document_chat_handler = None
+DOCUMENT_CHAT_TOOL_NAME = "ga_add_document"
 
 
 def set_document_chat_handler(handler):
@@ -140,7 +141,7 @@ INTERNAL_TOOL_DEFINITIONS = [
         }
     },
     {
-        "name": "ga_add_document",
+        "name": DOCUMENT_CHAT_TOOL_NAME,
         "description": "Create a new chat document with custom markdown content. Use this to produce standalone analysis reports, summaries, or findings separate from the current conversation.",
         "schema": {
             "type": "object",
@@ -188,7 +189,7 @@ def execute_internal_tool(name: str, arguments: Dict[str, Any]) -> str:
         "rename_variable": _rename_variable,
         "get_function_list": _get_function_list,
         "get_strings": _get_strings,
-        "ga_add_document": _ga_add_document,
+        DOCUMENT_CHAT_TOOL_NAME: _ga_add_document,
     }
     handler = handlers.get(name)
     if not handler:

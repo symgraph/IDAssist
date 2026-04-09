@@ -337,7 +337,7 @@ class BaseLLMProvider(ABC):
             top_p=request.top_p,
             stream=request.stream,
             tools=tools,
-            tool_choice="auto",  # Let LLM decide when to use tools
+            tool_choice=request.tool_choice or "auto",
             stop=request.stop,
             presence_penalty=request.presence_penalty,
             frequency_penalty=request.frequency_penalty,

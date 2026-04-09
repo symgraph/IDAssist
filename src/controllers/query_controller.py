@@ -2,6 +2,7 @@
 
 from typing import Optional, Dict, Any, List, Callable
 import asyncio
+import json
 from ..qt_compat import QDateTime, QThread, QTimer, Signal, Qt, utc_timezone
 from src.ida_compat import log
 from src.services.binary_context_service import BinaryContextService, ViewLevel
@@ -15,12 +16,18 @@ from src.services.models.mcp_models import MCPToolExecutionRequest
 from src.services.mcp_connection_manager import MCPConnectionManager
 from src.services.mcp_tool_orchestrator import MCPToolOrchestrator
 from src.services.models.llm_models import ToolCall, ToolResult
-from src.services.internal_tools import set_document_chat_handler
+from src.services.internal_tools import set_document_chat_handler, DOCUMENT_CHAT_TOOL_NAME
+from src.services.graphrag.graphrag_tools import GRAPHRAG_TOOL_NAMES
 from src.services.rlhf_service import rlhf_service
 from src.services.models.rlhf_models import RLHFFeedbackEntry
 from src.controllers.chat_edit_manager import ChatEditManager
 from src.services.streaming import StreamingMarkdownRenderer
+from src.services.streaming.render_update import RenderUpdate
 from src.services.streaming.reasoning_filter import ReasoningFilter
+from src.services.models.transcript_models import ContextSnapshot, TranscriptEventKind
+from src.services.transcript_service import TranscriptService
+from src.services.transcript_renderer import TranscriptRenderer
+from src.services.tool_approval_service import ToolApprovalService
 from src.controllers.react_thread import ReActOrchestratorThread
 from src.services.models.react_models import ReActConfig, ReActResult, ReActStatus
 
@@ -477,6 +484,9 @@ class ToolExecutorThread(QThread):
         return results
 
 
+_STREAM_ARG_UNSET = object()
+
+
 class QueryController:
     CHAT_TYPE_METADATA_KEY = "chat_type"
     DOCUMENT_CHAT_METADATA_KEY = "is_document_chat"
@@ -500,6 +510,9 @@ class QueryController:
         
         # Chat editing
         self.chat_edit_manager = ChatEditManager()
+        self.transcript_service = TranscriptService(self.analysis_db)
+        self.transcript_renderer = TranscriptRenderer("IDAssist")
+        self.tool_approval_service = ToolApprovalService(self.analysis_db, self.transcript_service)
         
         # Chat management
         self.chats = {}  # chat_id -> chat_data
@@ -519,6 +532,13 @@ class QueryController:
         self._llm_response_buffer = ""
         self._query_active = False
         self._current_query_binary_hash = None  # Cache binary hash during query
+        self._active_stream_markdown = ""
+        self._context_snapshot: Optional[ContextSnapshot] = None
+        self._expanded_transcript_keys = set()
+        self._transcript_render_scheduled = False
+        self._queued_stream_markdown = None
+        self._queued_stream_markdown_explicit = False
+        self._stream_base_html = ""
         
         # Tool execution state
         self._tool_execution_active = False
@@ -526,6 +546,10 @@ class QueryController:
         self._tool_results: List[ToolResult] = []
         self._continuation_complete = False
         self._tool_call_attempts = {}  # Track tool call attempts for loop prevention
+        self._awaiting_tool_approvals: List[ToolCall] = []
+        self._synthetic_tool_results: Dict[str, ToolResult] = {}
+        self._tool_correlation_ids: Dict[str, str] = {}
+        self._denied_tool_calls: Dict[str, ToolCall] = {}
 
         # Streaming renderer and reasoning filter for responsive streaming
         self._streaming_renderer = StreamingMarkdownRenderer(
@@ -539,9 +563,14 @@ class QueryController:
         # ReAct (agentic mode) state
         self._react_thread: Optional[ReActOrchestratorThread] = None
         self._react_active = False
+        self._react_streaming_final_answer = False
+        self._last_todo_snapshot = ""
+        self._last_react_tasks: List[Dict[str, str]] = []
 
         # Connect view signals
         self._connect_signals()
+        self.transcript_service.add_listener(self._on_transcript_changed)
+        self.tool_approval_service.set_state_listener(self._on_approval_state_changed)
 
         # Register document chat handler for internal tools
         set_document_chat_handler(self._create_document_chat)
@@ -571,6 +600,309 @@ class QueryController:
         self.view.rag_enabled_changed.connect(self.on_rag_enabled_changed)
         self.view.mcp_enabled_changed.connect(self.on_mcp_enabled_changed)
         self.view.agentic_enabled_changed.connect(self.on_agentic_enabled_changed)
+        self.view.accept_all_tools_changed.connect(self.on_accept_all_tools_changed)
+        self.view.approval_decision_requested.connect(self.on_approval_decision_requested)
+        self.view.transcript_link_clicked.connect(self.on_transcript_link_clicked)
+        self.view.rlhf_feedback_requested.connect(self.handle_rlhf_feedback)
+
+    def _is_document_chat(self, chat_id: Optional[int] = None) -> bool:
+        if chat_id is None:
+            chat_id = self.current_chat_id
+        if chat_id is None:
+            return False
+        metadata = self._get_chat_metadata(chat_id)
+        return bool(metadata.get(self.DOCUMENT_CHAT_METADATA_KEY))
+
+    def _build_context_snapshot(self) -> ContextSnapshot:
+        active_provider = self.settings_service.get_active_llm_provider() or {}
+        provider_label = active_provider.get("name", "No provider")
+        model_name = active_provider.get("model", "No model")
+        message_count = 0
+        if self.current_chat_id and self.current_chat_id in self.chats:
+            message_count = len(self.chats[self.current_chat_id].get("messages", []))
+        return ContextSnapshot(
+            provider_label=provider_label,
+            model_name=model_name,
+            message_count=message_count,
+            peak_message_count=message_count,
+        )
+
+    def _status_text(self) -> str:
+        snapshot = self._context_snapshot or self._build_context_snapshot()
+        token_text = "No active context window data"
+        if snapshot.token_limit:
+            token_text = (
+                f"context {snapshot.token_count}/{snapshot.token_limit} tokens | "
+                f"{snapshot.message_count} msgs"
+            )
+            if snapshot.peak_token_count or snapshot.peak_message_count:
+                token_text += (
+                    f" | peak {snapshot.peak_token_count} tokens / "
+                    f"{snapshot.peak_message_count} msgs"
+                )
+            if snapshot.threshold:
+                token_text += f" | threshold {snapshot.threshold}"
+            if snapshot.compaction_summary:
+                token_text += f" | compacted {snapshot.compaction_summary}"
+        return f"Model: {snapshot.provider_label} / {snapshot.model_name} | {token_text}"
+
+    def _refresh_status_strip(self):
+        self.view.set_context_status(self._status_text())
+
+    def _refresh_edit_button_state(self):
+        if self._is_document_chat():
+            self.view.set_edit_available(bool(self.current_chat_id))
+            return
+        binary_hash = self._current_query_binary_hash or self._get_current_binary_hash()
+        available = False
+        if binary_hash and self.current_chat_id:
+            events = self.transcript_service.get_transcript_events(binary_hash, str(self.current_chat_id))
+            available = any(event.event_kind == TranscriptEventKind.ASSISTANT_MESSAGE for event in events)
+        self.view.set_edit_available(available)
+
+    def _build_transcript_html(self, streaming_markdown: Optional[str] = None) -> Optional[str]:
+        if not self.current_chat_id or self.current_chat_id not in self.chats:
+            return None
+        if self._is_document_chat():
+            return None
+        binary_hash = self._current_query_binary_hash or self._get_current_binary_hash()
+        if not binary_hash:
+            return None
+        self.transcript_service.ensure_backfilled(binary_hash, str(self.current_chat_id), self.analysis_db)
+        events = self.transcript_service.get_transcript_events(binary_hash, str(self.current_chat_id))
+        title = self.chats[self.current_chat_id].get("name", f"Chat {self.current_chat_id}")
+        return self.transcript_renderer.render(
+            title,
+            events,
+            streaming_assistant_markdown=streaming_markdown,
+            expanded_keys=self._expanded_transcript_keys,
+            context_snapshot=self._context_snapshot or self._build_context_snapshot(),
+        )
+
+    def _apply_streaming_transcript_update(self, streaming_markdown: str, force_base_refresh: bool = False):
+        if not self.current_chat_id or self._is_document_chat():
+            self._render_transcript_view_now(streaming_markdown or None)
+            return
+        base_html = self._build_transcript_html(None)
+        if not base_html:
+            self._render_transcript_view_now(streaming_markdown or None)
+            return
+        if force_base_refresh or base_html != self._stream_base_html:
+            self._stream_base_html = base_html
+            self.view.begin_streaming(base_html)
+        pending_html = self.transcript_renderer.render_streaming_assistant_card(streaming_markdown or "")
+        self.view.apply_streaming_update(RenderUpdate.incremental("", pending_html))
+        self._refresh_status_strip()
+        self._refresh_edit_button_state()
+
+    def _refresh_transcript_view(self, streaming_markdown=_STREAM_ARG_UNSET):
+        active_render = self._query_active or self._react_active or self._tool_execution_active
+        if streaming_markdown is not _STREAM_ARG_UNSET:
+            self._queued_stream_markdown = streaming_markdown
+            self._queued_stream_markdown_explicit = True
+        if active_render:
+            if not self._transcript_render_scheduled:
+                self._transcript_render_scheduled = True
+                QTimer.singleShot(16, self._flush_transcript_refresh)
+            return
+
+        resolved_streaming = (
+            streaming_markdown if streaming_markdown is not _STREAM_ARG_UNSET
+            else (self._active_stream_markdown or None)
+        )
+        self._render_transcript_view_now(resolved_streaming)
+
+    def _flush_transcript_refresh(self):
+        self._transcript_render_scheduled = False
+        if self._queued_stream_markdown_explicit:
+            resolved_streaming = self._queued_stream_markdown
+        else:
+            resolved_streaming = self._active_stream_markdown or None
+        self._queued_stream_markdown = None
+        self._queued_stream_markdown_explicit = False
+        if (self._query_active or self._react_active or self._tool_execution_active) and resolved_streaming is not None:
+            self._apply_streaming_transcript_update(resolved_streaming, force_base_refresh=True)
+        else:
+            self._render_transcript_view_now(resolved_streaming)
+
+    def _render_transcript_view_now(self, streaming_markdown: Optional[str] = None):
+        if not self.current_chat_id or self.current_chat_id not in self.chats:
+            self.view.set_chat_content("No chat selected. Click 'New' to start a conversation.")
+            self._refresh_status_strip()
+            return
+
+        if self._is_document_chat():
+            chat = self.chats[self.current_chat_id]
+            markdown_content = self._format_chat_as_markdown(chat)
+            self.view.set_chat_content(markdown_content)
+            self._refresh_status_strip()
+            self._refresh_edit_button_state()
+            return
+
+        html = self._build_transcript_html(streaming_markdown)
+        if not html:
+            self.view.set_chat_content("No binary loaded.")
+            self._refresh_status_strip()
+            return
+        self._stream_base_html = html if not streaming_markdown else self._stream_base_html
+        self.view.set_chat_html(html)
+        self._refresh_status_strip()
+        self._refresh_edit_button_state()
+
+    def _on_transcript_changed(self, binary_hash: str, chat_id: str):
+        if not self.current_chat_id:
+            return
+        current_binary_hash = self._current_query_binary_hash or self._get_current_binary_hash()
+        if binary_hash == current_binary_hash and str(self.current_chat_id) == str(chat_id):
+            self._refresh_transcript_view(self._active_stream_markdown or None)
+
+    def _on_approval_state_changed(self):
+        pending = self.tool_approval_service.get_first_pending_for_chat(self.current_chat_id or -1)
+        self.view.set_pending_approval(pending)
+        self.view.set_accept_all_tools_checked(
+            self.tool_approval_service.is_accept_all_tools_enabled(self.current_chat_id or -1)
+            if self.current_chat_id else False
+        )
+
+    def on_accept_all_tools_changed(self, enabled: bool):
+        if self.current_chat_id is None:
+            self.new_chat()
+        if self.current_chat_id is None:
+            return
+        self.tool_approval_service.set_accept_all_tools_enabled(self.current_chat_id, enabled)
+
+    def on_approval_decision_requested(self, decision: str):
+        if self.current_chat_id is None:
+            return
+        pending = self.tool_approval_service.get_first_pending_for_chat(self.current_chat_id)
+        if not pending:
+            self.view.set_pending_approval(None)
+            return
+        outcome = self.tool_approval_service.resolve_pending(pending.request_id, decision)
+        if not outcome:
+            return
+        tool_call = self._denied_tool_calls.pop(pending.request_id, None)
+        if tool_call and not outcome.approved:
+            self._synthetic_tool_results[tool_call.id] = ToolResult(
+                tool_call_id=tool_call.id,
+                content="",
+                error="User denied tool execution.",
+            )
+        self._continue_pending_tool_approvals()
+
+    def on_transcript_link_clicked(self, href: str):
+        if href.startswith("tool-expand:"):
+            self._expanded_transcript_keys.add(href.split(":", 1)[1])
+        elif href.startswith("tool-collapse:"):
+            self._expanded_transcript_keys.discard(href.split(":", 1)[1])
+        elif href.startswith("tasks-expand:"):
+            self._expanded_transcript_keys.add(f"tasks:{href.split(':', 1)[1]}")
+        elif href.startswith("tasks-collapse:"):
+            self._expanded_transcript_keys.discard(f"tasks:{href.split(':', 1)[1]}")
+        else:
+            return
+        self._refresh_transcript_view(self._active_stream_markdown or None)
+
+    def _resolve_tool_source(self, tool_name: str) -> str:
+        if tool_name == DOCUMENT_CHAT_TOOL_NAME:
+            return "internal:document"
+        if tool_name in GRAPHRAG_TOOL_NAMES:
+            return "internal:graphrag"
+        self.mcp_orchestrator._refresh_tool_cache()
+        server_name = self.mcp_orchestrator._tool_server_map.get(tool_name)
+        if server_name:
+            return f"mcp:{server_name}"
+        return "tool"
+
+    def _parse_react_tasks(self, todos_formatted: str) -> List[Dict[str, str]]:
+        tasks: List[Dict[str, str]] = []
+        for raw_line in (todos_formatted or "").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith(("Summary:", "Progress:")):
+                continue
+            lowered = line.lower()
+            status = "pending"
+            task_text = line
+            if lowered.startswith(("[x]", "done", "complete")):
+                status = "completed"
+            elif lowered.startswith(("[>]", "active", "in_progress", "in progress")):
+                status = "in_progress"
+            task_text = task_text.lstrip("-* ").replace("[x]", "", 1).replace("[ ]", "", 1).replace("[>]", "", 1).strip()
+            tasks.append({"task": task_text, "status": status})
+        return tasks
+
+    def _todo_summary(self, tasks: List[Dict[str, str]]) -> str:
+        total = len(tasks)
+        completed = sum(1 for task in tasks if task.get("status") == "completed")
+        active = sum(1 for task in tasks if task.get("status") == "in_progress")
+        pending = max(0, total - completed - active)
+        return f"Progress: {completed}/{total} complete | {active} active | {pending} pending"
+
+    def _begin_tool_workflow(self, tool_calls: List[ToolCall]):
+        if not self.current_chat_id:
+            return
+        binary_hash = self._current_query_binary_hash or self._get_current_binary_hash()
+        if not binary_hash:
+            return
+
+        self._tool_execution_active = True
+        self._pending_tool_calls = list(tool_calls)
+        self._awaiting_tool_approvals = []
+        self._synthetic_tool_results = {}
+        self._denied_tool_calls = {}
+        self._tool_correlation_ids = {}
+
+        for tool_call in tool_calls:
+            correlation_id = tool_call.id or f"tool-{len(self._tool_correlation_ids) + 1}"
+            self._tool_correlation_ids[tool_call.id] = correlation_id
+            tool_source = self._resolve_tool_source(tool_call.name)
+            self.transcript_service.append_tool_requested(
+                binary_hash,
+                str(self.current_chat_id),
+                correlation_id,
+                tool_call.name,
+                tool_source,
+                tool_call.arguments or {},
+            )
+            approval = self.tool_approval_service.request_approval(
+                self.current_chat_id,
+                binary_hash,
+                correlation_id,
+                tool_call.name,
+                tool_source,
+                tool_call.arguments or {},
+            )
+            if approval:
+                self._awaiting_tool_approvals.append(tool_call)
+                self._denied_tool_calls[approval.request_id] = tool_call
+
+        self._continue_pending_tool_approvals()
+
+    def _continue_pending_tool_approvals(self):
+        if self.current_chat_id is None:
+            return
+        pending = self.tool_approval_service.get_first_pending_for_chat(self.current_chat_id)
+        self.view.set_pending_approval(pending)
+        if pending:
+            return
+
+        approved_calls = [tc for tc in self._pending_tool_calls if tc.id not in self._synthetic_tool_results]
+        if not approved_calls:
+            ordered_results = [self._synthetic_tool_results[tc.id] for tc in self._pending_tool_calls if tc.id in self._synthetic_tool_results]
+            self._on_tool_results_ready(ordered_results)
+            return
+
+        for tool_call in approved_calls:
+            correlation_id = self._tool_correlation_ids.get(tool_call.id, tool_call.id)
+            self.transcript_service.append_tool_started(
+                self._current_query_binary_hash or self._get_current_binary_hash(),
+                str(self.current_chat_id),
+                correlation_id,
+                tool_call.name,
+                self._resolve_tool_source(tool_call.name),
+            )
+        self._tool_execution_active = True
+        self._setup_tool_executor(approved_calls)
     
     def set_current_offset(self, offset: int):
         """Update current offset in context service and view"""
@@ -629,6 +961,10 @@ class QueryController:
                     self.view.history_table.setSortingEnabled(True)
                 # Set default content since no chats exist
                 self.view.set_chat_content("No chat selected. Click 'New' to start a conversation.")
+                self._context_snapshot = self._build_context_snapshot()
+                self._refresh_status_strip()
+                self.view.set_accept_all_tools_enabled(bool(binary_hash))
+                self.view.set_pending_approval(None)
                 return
             
             log.log_info(f"Loading {len(existing_chats)} existing chats from database")
@@ -688,6 +1024,9 @@ class QueryController:
                 self.view.history_table.sortByColumn(1, Qt.DescendingOrder)  # Sort by timestamp, descending
             
             log.log_info(f"Successfully loaded {len(existing_chats)} chats")
+            self._context_snapshot = self._build_context_snapshot()
+            self._refresh_status_strip()
+            self.view.set_accept_all_tools_enabled(bool(binary_hash))
             
         except Exception as e:
             log.log_error(f"Failed to load existing chats: {e}")
@@ -907,6 +1246,10 @@ class QueryController:
             self._query_active = True
             self._current_query_binary_hash = self._get_current_binary_hash()
             self.view.set_query_running(True)
+            self._active_stream_markdown = ""
+            self._stream_base_html = ""
+            self._context_snapshot = self._build_context_snapshot()
+            self._refresh_status_strip()
 
             # Reset auto-scroll to follow new response by default
             self.view.enable_auto_scroll()
@@ -917,10 +1260,16 @@ class QueryController:
             # Save user query in native format for the active provider
             provider_type = active_provider.get('provider_type', 'anthropic_platform')
             self._save_user_message_native(query_text, provider_type)
+            if self._current_query_binary_hash:
+                self.transcript_service.append_user_message(
+                    self._current_query_binary_hash,
+                    str(self.current_chat_id),
+                    query_text,
+                )
             
             # Add placeholder for assistant response (don't save to database)
             self._add_message_to_chat(self.current_chat_id, "assistant", "*Thinking...*", save_to_db=False)
-            self._update_chat_display()
+            self._refresh_transcript_view("")
             
             
             # Get current context and settings
@@ -981,9 +1330,15 @@ class QueryController:
         if self._query_active and hasattr(self, 'llm_thread') and self.llm_thread:
             self.llm_thread.cancel()
             self._cleanup_llm_thread()
+        if self.current_chat_id:
+            self.tool_approval_service.cancel_pending_for_chat(self.current_chat_id)
+        self._active_stream_markdown = ""
+        self._stream_base_html = ""
         self._query_active = False
         self._current_query_binary_hash = None
         self.view.set_query_running(False)
+        self._context_snapshot = self._build_context_snapshot()
+        self._refresh_transcript_view()
     
     def new_chat(self):
         """Create a new chat session"""
@@ -1027,8 +1382,11 @@ class QueryController:
         self.current_chat_id = chat_id
         
         # Set initial content
-        initial_content = self._get_initial_chat_content()
-        self.view.set_chat_content(initial_content)
+        self._context_snapshot = self._build_context_snapshot()
+        self._refresh_transcript_view()
+        self.view.set_accept_all_tools_enabled(True)
+        self.view.set_accept_all_tools_checked(False)
+        self.view.set_pending_approval(None)
         
         log.log_info(f"New chat created: {chat_name}")
 
@@ -1213,7 +1571,9 @@ class QueryController:
                 except Exception as e:
                     log.log_error(f"Failed to load chat history from database: {e}")
             
+            self._context_snapshot = self._build_context_snapshot()
             self._update_chat_display()
+            self._on_approval_state_changed()
         else:
             log.log_warn(f"Chat ID {chat_id} not found")
     
@@ -1261,15 +1621,49 @@ class QueryController:
         self._save_chat_metadata(chat_id)
     
     def on_edit_mode_changed(self, is_edit_mode: bool):
-        """Handle edit mode change using ChatEditManager"""
+        """Handle edit mode change."""
+        if self._is_document_chat():
+            if is_edit_mode:
+                self._prepare_edit_mode()
+            else:
+                if self.current_chat_id:
+                    try:
+                        self._save_edited_chat_content_with_manager()
+                    except Exception as e:
+                        log.log_error(f"Failed to save edited chat: {e}")
+            return
+
         if is_edit_mode:
-            self._prepare_edit_mode()
+            self._prepare_latest_assistant_edit_mode()
         else:
-            if self.current_chat_id:
-                try:
-                    self._save_edited_chat_content_with_manager()
-                except Exception as e:
-                    log.log_error(f"Failed to save edited chat: {e}")
+            self._save_latest_assistant_edit()
+
+    def _prepare_latest_assistant_edit_mode(self):
+        if not self.current_chat_id:
+            return
+        binary_hash = self._current_query_binary_hash or self._get_current_binary_hash()
+        if not binary_hash:
+            return
+        events = self.transcript_service.get_transcript_events(binary_hash, str(self.current_chat_id))
+        for event in reversed(events):
+            if event.event_kind == TranscriptEventKind.ASSISTANT_MESSAGE:
+                self.view.set_chat_content(event.content_text or "")
+                return
+        self.view.set_chat_content("")
+
+    def _save_latest_assistant_edit(self):
+        if not self.current_chat_id or self._is_document_chat():
+            return
+        binary_hash = self._current_query_binary_hash or self._get_current_binary_hash()
+        if not binary_hash:
+            return
+        edited_content = self.view.get_chat_content()
+        self.transcript_service.update_last_assistant_message(
+            binary_hash,
+            str(self.current_chat_id),
+            edited_content,
+        )
+        self._refresh_transcript_view()
 
     def _prepare_edit_mode(self):
         """Prepare chat content for editing using ChatEditManager"""
@@ -1831,6 +2225,7 @@ class QueryController:
         
         self.chats[chat_id]["messages"].append(message)
         self.chats[chat_id]["updated"] = timestamp
+        self._context_snapshot = self._build_context_snapshot()
         
         # Persist to database only if requested
         if save_to_db:
@@ -1854,10 +2249,9 @@ class QueryController:
 
         # Get filtered markdown and update assistant message in memory
         filtered_markdown = self._streaming_renderer.get_full_markdown()
+        self._active_stream_markdown = filtered_markdown
         self._update_last_assistant_message(filtered_markdown)
-
-        # Pass RenderUpdate directly to view for cursor-based update (no full rebuild)
-        self.view.apply_streaming_update(update)
+        self._apply_streaming_transcript_update(filtered_markdown)
 
     def _on_thinking_start(self) -> None:
         """Show thinking indicator when <reasoning> detected."""
@@ -1866,6 +2260,10 @@ class QueryController:
     def _update_chat_display(self):
         """Update the chat display with current chat content"""
         if not self.current_chat_id or self.current_chat_id not in self.chats:
+            return
+
+        if not self._is_document_chat():
+            self._refresh_transcript_view(self._active_stream_markdown or None)
             return
 
         # Only load from native storage when not actively streaming
@@ -2447,17 +2845,16 @@ Tool Usage Guidelines:
         self._tool_execution_active = False
         self._continuation_complete = False
         self._tool_call_attempts = {}  # Reset tool call attempt tracking
+        self._stream_base_html = ""
 
         # Reset streaming state for new query
         self._reasoning_filter.reset()
         self._streaming_renderer.reset()
 
         # Set up static chat history for incremental streaming updates
-        # This renders history excluding the streaming assistant message
         if self.current_chat_id and self.current_chat_id in self.chats:
-            chat = self.chats[self.current_chat_id]
-            history_html = self._render_chat_history_for_streaming(chat)
-            self.view.begin_streaming(history_html)
+            self._active_stream_markdown = ""
+            self._refresh_transcript_view("")
 
         # Create and start the LLM query thread
         native_callback = self._create_native_message_callback()
@@ -2517,6 +2914,8 @@ Tool Usage Guidelines:
 
             # Rebuild full chat display after streaming completes
             # This ensures chat history + final assistant response are properly rendered
+            self._active_stream_markdown = ""
+            self._stream_base_html = ""
             self._update_chat_display()
 
             # Clean up
@@ -2540,6 +2939,8 @@ Tool Usage Guidelines:
 
         error_response = f"**Error**: {error}\n\n*The LLM query failed. Please check your provider configuration and try again.*"
         self._update_last_assistant_message(error_response, final_update=True)
+        self._active_stream_markdown = ""
+        self._stream_base_html = ""
         self._update_chat_display()
 
         # Clean up
@@ -2553,12 +2954,21 @@ Tool Usage Guidelines:
         # Check for loop detection (for all tool calls, not just additional ones)
         if not self._should_allow_tool_execution(tool_calls):
             # Stop execution and complete conversation
-            self._add_message_to_chat(self.current_chat_id, "assistant", "**Note:** Tool execution stopped to prevent infinite loop.")
+            if self.current_chat_id and self._current_query_binary_hash and not self._is_document_chat():
+                self.transcript_service.append_iteration_notice(
+                    self._current_query_binary_hash,
+                    str(self.current_chat_id),
+                    "Tool execution stopped to prevent an infinite loop.",
+                    metadata={"phase": "loop_guard"},
+                )
+            else:
+                self._add_message_to_chat(self.current_chat_id, "assistant", "**Note:** Tool execution stopped to prevent infinite loop.")
             self._cleanup_continuation_thread()
             self._tool_execution_active = False
             self._query_active = False
             self._current_query_binary_hash = None
             self.view.set_query_running(False)
+            self._refresh_transcript_view()
             return
         
         # Determine if this is from continuation thread (additional tools) or initial LLM response
@@ -2575,7 +2985,6 @@ Tool Usage Guidelines:
         
         # Store tool calls and mark execution as active
         self._pending_tool_calls = tool_calls
-        self._tool_execution_active = True
 
         # Update in-memory message (but don't save to DB - the native_message_callback
         # already saved the assistant message WITH tool_calls during streaming)
@@ -2583,31 +2992,15 @@ Tool Usage Guidelines:
             self._update_last_assistant_message(self._llm_response_buffer, final_update=False)
             self._initial_response_saved = True
 
-        # Execute tool calls using common helpers
-        self._create_tool_call_messages(tool_calls)
-        self._setup_tool_executor(tool_calls)
+        self._begin_tool_workflow(tool_calls)
     
     def _create_tool_call_messages(self, tool_calls: List[ToolCall]):
         """Create and add tool call messages to chat for display"""
-        for i, tool_call in enumerate(tool_calls):
-            # Log tool call details (similar to original logging)
-            log.log_info(f"Tool call {i}: {tool_call.name} with args: {tool_call.arguments}")
-            
-            tool_call_content = f"**Calling tool:** `{tool_call.name}`"
-            if tool_call.arguments:
-                import json
-                try:
-                    args_str = json.dumps(tool_call.arguments)
-                    tool_call_content += f"\n\n**Arguments:**`{args_str}`"
-                except:
-                    tool_call_content += f"\n\n**Arguments:** {tool_call.arguments}"
-            
-            self._add_message_to_chat(self.current_chat_id, "tool_call", tool_call_content)
-        
-        self._update_chat_display()
+        return
     
     def _setup_tool_executor(self, tool_calls: List[ToolCall]):
         """Create, configure, and start the tool executor thread"""
+        self._tool_execution_active = True
         # Create tool executor thread (no parent since QueryController is not a QObject)
         self.tool_executor_thread = ToolExecutorThread(
             self.mcp_orchestrator,
@@ -2675,9 +3068,17 @@ Tool Usage Guidelines:
     def _handle_tool_execution_error(self, response_content: str):
         """Handle tool execution error (runs on main thread)"""
         try:
-            # Add error as a new message
-            self._add_message_to_chat(self.current_chat_id, "error", response_content)
-            self._update_chat_display()
+            if self.current_chat_id and self._current_query_binary_hash and not self._is_document_chat():
+                self.transcript_service.append_iteration_notice(
+                    self._current_query_binary_hash,
+                    str(self.current_chat_id),
+                    response_content,
+                    metadata={"phase": "tool_error"},
+                )
+                self._refresh_transcript_view(self._active_stream_markdown or None)
+            else:
+                self._add_message_to_chat(self.current_chat_id, "error", response_content)
+                self._update_chat_display()
             
             # Complete the response on error
             self._tool_execution_active = False
@@ -2698,28 +3099,37 @@ Tool Usage Guidelines:
     def _on_tool_results_ready(self, results: List[ToolResult]):
         """Handle tool results ready signal - ALWAYS continue conversation"""
         self._tool_results = results
-
-        # Add tool response messages for each result
-        # Only show success/failure status to user, but keep full content for LLM context
-        for tool_call, result in zip(self._pending_tool_calls, results):
-            # User-facing message: Just show success/failure
-            if result.error:
-                user_message = f"🔧 Tool `{tool_call.name}` **failed**: {result.error}"
-            else:
-                # Show success with content length instead of full content
-                content_preview = f"{len(result.content)} characters" if result.content else "no output"
-                user_message = f"✅ Tool `{tool_call.name}` **succeeded** ({content_preview})"
-
-            # Add user-facing message for display only (not saved to DB or sent to LLM)
-            self._add_message_to_chat(self.current_chat_id, "tool_status", user_message, save_to_db=False)
-
-        self._update_chat_display()
+        result_map = {result.tool_call_id: result for result in results}
+        result_map.update(self._synthetic_tool_results)
+        ordered_results: List[ToolResult] = []
+        binary_hash = self._current_query_binary_hash or self._get_current_binary_hash()
+        for tool_call in self._pending_tool_calls:
+            result = result_map.get(tool_call.id)
+            if not result:
+                result = ToolResult(
+                    tool_call_id=tool_call.id,
+                    content="",
+                    error="No tool result returned.",
+                )
+            ordered_results.append(result)
+            if binary_hash and self.current_chat_id:
+                self.transcript_service.append_tool_completed(
+                    binary_hash,
+                    str(self.current_chat_id),
+                    self._tool_correlation_ids.get(tool_call.id, tool_call.id),
+                    tool_call.name,
+                    self._resolve_tool_source(tool_call.name),
+                    result.error or result.content or "",
+                    success=not bool(result.error),
+                )
+        self._tool_results = ordered_results
+        self._refresh_transcript_view(self._active_stream_markdown or None)
         
         # ALWAYS continue LLM conversation with results (success or failure)
         try:
             
             # Prepare conversation messages for continuation
-            messages = self._prepare_continuation_messages(self._pending_tool_calls, results)
+            messages = self._prepare_continuation_messages(self._pending_tool_calls, ordered_results)
             
             # Get active provider and MCP tools
             active_provider = self.settings_service.get_active_llm_provider()
@@ -2941,6 +3351,8 @@ Tool Usage Guidelines:
                 self._update_rlhf_response(response_content)
 
             # Final display with full markdown rendering (not plain text)
+            self._active_stream_markdown = ""
+            self._stream_base_html = ""
             self._update_chat_display()
 
             # Clean up and end the query
@@ -3007,6 +3419,8 @@ Tool Usage Guidelines:
             # Save to native format on final update
             if final_update:
                 try:
+                    self._active_stream_markdown = ""
+                    self._stream_base_html = ""
                     # Get active provider type for native saving
                     active_provider = self.settings_service.get_active_llm_provider()
                     if active_provider:
@@ -3023,6 +3437,13 @@ Tool Usage Guidelines:
                         )
                     else:
                         log.log_warn("No binary hash available for persisting assistant message")
+                    if binary_hash and not self._is_document_chat():
+                        self.transcript_service.append_assistant_message(
+                            binary_hash,
+                            str(self.current_chat_id),
+                            content,
+                            metadata={"provider_type": provider_type if active_provider else None},
+                        )
                 except Exception as e:
                     log.log_error(f"Failed to persist updated assistant message: {e}")
         else:
@@ -3139,6 +3560,10 @@ Tool Usage Guidelines:
             self._react_active = True
             self._current_query_binary_hash = self._get_current_binary_hash()
             self.view.set_query_running(True)
+            self._active_stream_markdown = ""
+            self._stream_base_html = ""
+            self._context_snapshot = self._build_context_snapshot()
+            self._refresh_status_strip()
 
             # Reset auto-scroll to follow new response by default
             self.view.enable_auto_scroll()
@@ -3149,15 +3574,22 @@ Tool Usage Guidelines:
             # Save user query in native format for the active provider
             provider_type = active_provider.get('provider_type', 'anthropic_platform')
             self._save_user_message_native(query_text, provider_type)
+            if self._current_query_binary_hash:
+                self.transcript_service.append_user_message(
+                    self._current_query_binary_hash,
+                    str(self.current_chat_id),
+                    query_text,
+                )
+                self.transcript_service.append_iteration_notice(
+                    self._current_query_binary_hash,
+                    str(self.current_chat_id),
+                    f"Planning investigation steps for: {query_text}",
+                    metadata={"phase": "planning"},
+                )
 
-            # Add placeholder for assistant response (will be filled by content chunks)
-            self._add_message_to_chat(self.current_chat_id, "assistant",
-                                      "*Initializing agentic investigation...*", save_to_db=False)
-
-            # Update display to show user query and assistant placeholder
-            self._update_chat_display()
-
-            log.log_debug(f"Agentic query: Added user message and assistant placeholder to chat {self.current_chat_id}")
+            # Update display to show the initial user query and planning notice cards.
+            self._refresh_transcript_view("")
+            log.log_debug(f"Agentic query: Added user message and transcript planning notice to chat {self.current_chat_id}")
 
             # Get context and MCP tools
             context = self.context_service.get_current_context()
@@ -3209,12 +3641,12 @@ Current Offset: {context.get('offset_hex', 'N/A')}"""
         self._reasoning_filter.reset()
         self._streaming_renderer.reset()
         self._llm_response_buffer = ""
+        self._react_streaming_final_answer = False
 
         # Set up static chat history for incremental streaming updates
         if self.current_chat_id and self.current_chat_id in self.chats:
-            chat = self.chats[self.current_chat_id]
-            history_html = self._render_chat_history_for_streaming(chat)
-            self.view.begin_streaming(history_html)
+            self._active_stream_markdown = ""
+            self._refresh_transcript_view("")
 
         # Create and configure thread
         self._react_thread = ReActOrchestratorThread(
@@ -3234,6 +3666,7 @@ Current Offset: {context.get('offset_hex', 'N/A')}"""
         self._react_thread.finding_discovered.connect(self._on_react_finding)
         self._react_thread.progress_update.connect(self._on_react_progress)
         self._react_thread.content_chunk.connect(self._on_react_content_chunk)
+        self._react_thread.tool_event.connect(self._on_react_tool_event)
         self._react_thread.analysis_complete.connect(self._on_react_complete)
         self._react_thread.analysis_error.connect(self._on_react_error)
 
@@ -3244,36 +3677,118 @@ Current Offset: {context.get('offset_hex', 'N/A')}"""
     def _on_react_planning_complete(self, todos_formatted: str):
         """Handle planning phase completion"""
         log.log_debug(f"ReAct planning complete: {todos_formatted[:100]}...")
+        self._last_todo_snapshot = todos_formatted
+        self._last_react_tasks = self._parse_react_tasks(todos_formatted)
+        if self.current_chat_id and self._current_query_binary_hash:
+            self.transcript_service.append_todo_snapshot(
+                self._current_query_binary_hash,
+                str(self.current_chat_id),
+                self._todo_summary(self._last_react_tasks),
+                self._last_react_tasks,
+            )
 
     def _on_react_todos_updated(self, todos_formatted: str):
         """Handle todo list updates"""
         log.log_debug(f"ReAct todos updated")
+        self._last_todo_snapshot = todos_formatted
+        self._last_react_tasks = self._parse_react_tasks(todos_formatted)
+        if self.current_chat_id and self._current_query_binary_hash:
+            self.transcript_service.append_todo_snapshot(
+                self._current_query_binary_hash,
+                str(self.current_chat_id),
+                self._todo_summary(self._last_react_tasks),
+                self._last_react_tasks,
+            )
 
     def _on_react_iteration_started(self, iteration: int, current_todo: str):
         """Handle iteration start"""
         log.log_debug(f"ReAct iteration {iteration} started: {current_todo[:50]}...")
+        if self.current_chat_id and self._current_query_binary_hash:
+            self.transcript_service.append_iteration_notice(
+                self._current_query_binary_hash,
+                str(self.current_chat_id),
+                current_todo,
+                metadata={"iteration": iteration, "phase": "start"},
+            )
 
     def _on_react_iteration_complete(self, iteration: int, summary: str):
         """Handle iteration completion"""
         log.log_debug(f"ReAct iteration {iteration} complete")
+        if self.current_chat_id and self._current_query_binary_hash:
+            self.transcript_service.append_iteration_notice(
+                self._current_query_binary_hash,
+                str(self.current_chat_id),
+                summary or f"Iteration {iteration} complete",
+                metadata={"iteration": iteration, "phase": "complete"},
+            )
 
     def _on_react_finding(self, finding: str):
         """Handle new finding discovered"""
         log.log_debug(f"ReAct finding: {finding[:50]}...")
+        if self.current_chat_id and self._current_query_binary_hash:
+            self.transcript_service.append_finding(
+                self._current_query_binary_hash,
+                str(self.current_chat_id),
+                finding,
+            )
 
     def _on_react_progress(self, message: str, iteration: int):
         """Handle progress update"""
         log.log_debug(f"ReAct progress: {message} (iteration {iteration})")
+        if "Synthesizing final answer" in message and not self._react_streaming_final_answer:
+            self._llm_response_buffer = ""
+            self._active_stream_markdown = ""
+            self._stream_base_html = ""
+            self._reasoning_filter.reset()
+            self._streaming_renderer.reset()
+            self._react_streaming_final_answer = True
+            self._ensure_react_assistant_placeholder()
+            self._refresh_transcript_view("")
 
     def _on_react_content_chunk(self, chunk: str):
         """Handle streaming content chunk from ReAct"""
-        if not chunk:
+        if not chunk or not self._react_streaming_final_answer:
             return
 
         self._llm_response_buffer += chunk
 
         # Feed chunk through reasoning filter (which feeds to streaming renderer)
         self._reasoning_filter.feed(chunk)
+
+    def _on_react_tool_event(self, event: dict):
+        if not self.current_chat_id or not self._current_query_binary_hash:
+            return
+        correlation_id = event.get("tool_call_id") or event.get("correlation_id") or event.get("tool_name", "tool")
+        tool_name = event.get("tool_name", "tool")
+        tool_source = self._resolve_tool_source(tool_name)
+        phase = event.get("phase")
+        if phase == "requested":
+            self.transcript_service.append_tool_requested(
+                self._current_query_binary_hash,
+                str(self.current_chat_id),
+                correlation_id,
+                tool_name,
+                tool_source,
+                event.get("arguments") or {},
+            )
+        elif phase == "started":
+            self.transcript_service.append_tool_started(
+                self._current_query_binary_hash,
+                str(self.current_chat_id),
+                correlation_id,
+                tool_name,
+                tool_source,
+            )
+        elif phase in ("completed", "failed"):
+            self.transcript_service.append_tool_completed(
+                self._current_query_binary_hash,
+                str(self.current_chat_id),
+                correlation_id,
+                tool_name,
+                tool_source,
+                event.get("content") or event.get("error") or "",
+                success=phase == "completed",
+            )
 
     def _on_react_complete(self, result: ReActResult):
         """Handle ReAct analysis completion"""
@@ -3287,22 +3802,13 @@ Current Offset: {context.get('offset_hex', 'N/A')}"""
 
         # Format final response with statistics
         status_emoji = "✅" if result.status == ReActStatus.SUCCESS else "⚠️"
-        final_content = f"""{self._llm_response_buffer}
+        final_content = result.answer or self._llm_response_buffer
 
----
-
-## {status_emoji} Investigation Complete
-
-| Metric | Value |
-|--------|-------|
-| Status | {result.status.value} |
-| Iterations | {result.iteration_count} |
-| Tool Calls | {result.tool_call_count} |
-| Duration | {result.duration_seconds:.1f}s |
-"""
-
-        # Update assistant message with final content
-        self._update_last_assistant_message(final_content, final_update=True)
+        # Persist the final synthesis as its own assistant turn.
+        self._finalize_react_assistant_message(final_content)
+        self._active_stream_markdown = ""
+        self._stream_base_html = ""
+        self._react_streaming_final_answer = False
         self._update_chat_display()
 
         # Cleanup
@@ -3324,7 +3830,10 @@ Current Offset: {context.get('offset_hex', 'N/A')}"""
         self._streaming_renderer.reset()
 
         error_response = f"**Agentic Investigation Error:** {error}"
-        self._update_last_assistant_message(error_response, final_update=True)
+        self._finalize_react_assistant_message(error_response)
+        self._active_stream_markdown = ""
+        self._stream_base_html = ""
+        self._react_streaming_final_answer = False
         self._update_chat_display()
 
         # Cleanup
@@ -3347,3 +3856,16 @@ Current Offset: {context.get('offset_hex', 'N/A')}"""
                 log.log_error(f"Error during ReAct thread cleanup: {e}")
                 self._react_thread = None
         log.log_debug("ReAct thread cleaned up")
+
+    def _ensure_react_assistant_placeholder(self):
+        if not self.current_chat_id or self.current_chat_id not in self.chats:
+            return
+        messages = self.chats[self.current_chat_id]["messages"]
+        if not messages or messages[-1]["role"] != "assistant":
+            self._add_message_to_chat(self.current_chat_id, "assistant", "", save_to_db=False)
+
+    def _finalize_react_assistant_message(self, content: str):
+        if not self.current_chat_id or self.current_chat_id not in self.chats:
+            return
+        self._ensure_react_assistant_placeholder()
+        self._update_last_assistant_message(content, final_update=True)

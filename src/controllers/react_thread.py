@@ -33,6 +33,7 @@ class ReActOrchestratorThread(QThread):
     finding_discovered = Signal(str)         # New finding text
     progress_update = Signal(str, int)       # Status message, iteration
     content_chunk = Signal(str)              # Content update for display
+    tool_event = Signal(object)              # Structured tool lifecycle event
     analysis_complete = Signal(object)       # ReActResult
     analysis_error = Signal(str)             # Error message
 
@@ -117,6 +118,7 @@ class ReActOrchestratorThread(QThread):
         self._orchestrator.on_iteration_start = self._on_iteration_start
         self._orchestrator.on_iteration_complete = self._on_iteration_complete
         self._orchestrator.on_content = self._on_content
+        self._orchestrator.on_tool_event = self._on_tool_event
 
         # Run analysis
         result = await self._orchestrator.analyze(
@@ -155,3 +157,7 @@ class ReActOrchestratorThread(QThread):
         """Callback for content updates"""
         if not self.cancelled:
             self.content_chunk.emit(content)
+
+    def _on_tool_event(self, event: dict):
+        if not self.cancelled:
+            self.tool_event.emit(event)
