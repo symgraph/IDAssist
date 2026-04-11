@@ -3,7 +3,7 @@
   "plugin": {
     "name": "IDAssist",
     "entryPoint": "idassist_plugin.py",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "description": "AI-powered reverse engineering plugin with LLM analysis, semantic knowledge graphs, RAG search, and SymGraph collaboration",
     "license": "MIT",
     "urls": {
