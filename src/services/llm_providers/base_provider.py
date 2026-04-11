@@ -69,6 +69,39 @@ class BaseLLMProvider(ABC):
             pass
         return DEFAULT_PROVIDER_TIMEOUT_SECONDS
 
+    def _persist_oauth_api_key(self, api_key: str) -> bool:
+        """Persist an updated OAuth credential blob back to the provider settings row."""
+        current_api_key = self.config.get('api_key', '')
+        if not api_key or api_key == current_api_key:
+            return False
+
+        try:
+            from ..settings_service import SettingsService
+
+            settings_service = SettingsService()
+            provider_id = self.config.get('id')
+            updated = False
+
+            if provider_id is not None:
+                updated = settings_service.update_llm_provider(int(provider_id), api_key=api_key)
+
+            if not updated and self.name:
+                updated = settings_service.update_llm_provider_api_key_by_name(self.name, api_key)
+
+            if not updated:
+                log.log_warn(
+                    f"Unable to persist refreshed OAuth credentials for provider '{self.name}': provider not found"
+                )
+                return False
+
+            self.api_key = api_key
+            self.config['api_key'] = api_key
+            log.log_info(f"Persisted refreshed OAuth credentials for provider '{self.name}'")
+            return True
+        except Exception as e:
+            log.log_warn(f"Failed to persist refreshed OAuth credentials for provider '{self.name}': {e}")
+            return False
+
     # ===================================================================
     # Rate Limit Retry Mechanism
     # ===================================================================

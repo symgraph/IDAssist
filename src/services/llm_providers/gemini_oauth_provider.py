@@ -155,6 +155,7 @@ class GeminiOAuthProvider(BaseLLMProvider):
                 if tokens.get("refresh_token"):
                     self._credentials["refresh_token"] = tokens["refresh_token"]
                 self._credentials["expires_at"] = expires_at
+                self._persist_oauth_api_key(json.dumps(self._credentials))
 
                 log.log_info("Gemini access token refreshed successfully")
 

@@ -318,9 +318,7 @@ class OpenAIOAuthProvider(BaseLLMProvider):
             self._credentials["account_id"] = account_id
             self._account_id = account_id
 
-            # Update api_key field
-            self.api_key = json.dumps(self._credentials)
-            self.config["api_key"] = self.api_key
+            self._persist_oauth_api_key(json.dumps(self._credentials))
 
             log.log_info("OpenAI Codex access token refreshed successfully")
 

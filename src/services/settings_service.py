@@ -472,6 +472,26 @@ class SettingsService:
             finally:
                 conn.close()
 
+    def update_llm_provider_api_key_by_name(self, provider_name: str, api_key: str) -> bool:
+        """Update only the stored api_key blob for a provider identified by name."""
+        with self._db_lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE llm_providers SET api_key = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE name = ?
+                ''', (api_key, provider_name))
+
+                updated = cursor.rowcount > 0
+                conn.commit()
+                return updated
+            except Exception as e:
+                conn.rollback()
+                raise RuntimeError(f"Failed to update LLM provider API key: {e}")
+            finally:
+                conn.close()
+
     def delete_llm_provider(self, provider_id: int) -> bool:
         """Delete an LLM provider"""
         with self._db_lock:
