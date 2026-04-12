@@ -873,6 +873,8 @@ class SymGraphController(QObject):
             return "mips"
         if value in {"mips64", "mips64el", "mips64eb"}:
             return "mips64"
+        if value in {"m68k", "68k", "68000", "68010", "68020", "68030", "68040", "68060", "mc68000"}:
+            return "m68k"
         if value in {"ppc", "powerpc"}:
             return "ppc"
         if value in {"ppc64", "powerpc64", "ppc64le"}:
