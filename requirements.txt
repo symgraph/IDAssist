@@ -7,3 +7,4 @@ anyio>=4.6
 mcp==1.23.3
 whoosh
 aiohttp
+pywin32; platform_system == "Windows"

@@ -22,6 +22,7 @@ class MCPTransportType(Enum):
     """MCP transport protocol types."""
     SSE = "sse"
     STREAMABLEHTTP = "streamablehttp"
+    STDIO = "stdio"
 
 
 @dataclass
@@ -36,10 +37,20 @@ class MCPServerConfig:
     url: Optional[str] = None
     headers: Optional[Dict[str, str]] = None
 
+    # Stdio transport fields
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
+    cwd: Optional[str] = None
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         if self.transport_type in ("sse", "streamablehttp") and not self.url:
             raise ValueError(f"{self.transport_type} transport requires url")
+        if self.transport_type == "stdio" and not self.command:
+            raise ValueError("stdio transport requires command")
+        if self.args is None:
+            self.args = []
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'MCPServerConfig':
@@ -50,7 +61,11 @@ class MCPServerConfig:
             enabled=data.get('enabled', True),
             timeout=data.get('timeout', 30.0),
             url=data.get('url'),
-            headers=data.get('headers')
+            headers=data.get('headers'),
+            command=data.get('command'),
+            args=data.get('args'),
+            env=data.get('env'),
+            cwd=data.get('cwd')
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -61,7 +76,11 @@ class MCPServerConfig:
             'enabled': self.enabled,
             'timeout': self.timeout,
             'url': self.url,
-            'headers': self.headers
+            'headers': self.headers,
+            'command': self.command,
+            'args': self.args,
+            'env': self.env,
+            'cwd': self.cwd
         }
 
 

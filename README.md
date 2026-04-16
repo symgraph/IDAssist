@@ -48,7 +48,7 @@ Configure reasoning effort levels to control how much the LLM "thinks" before re
 
 ### MCP Integration
 
-IDAssist can connect to external MCP servers for tool-augmented LLM interactions where the model can programmatically inspect functions, read disassembly, query cross-references, and modify the IDB during reasoning. IDAssist also provides built-in internal tools for function calling without requiring an external MCP server.
+IDAssist can connect to external MCP servers for tool-augmented LLM interactions where the model can programmatically inspect functions, read disassembly, query cross-references, and modify the IDB during reasoning. Both URL-based MCP servers (`SSE` or `Streamable HTTP`) and stdio-based MCP servers started from a local CLI command are supported. IDAssist also provides built-in internal tools for function calling without requiring an external MCP server.
 
 ### Function Calling
 

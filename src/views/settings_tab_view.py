@@ -159,7 +159,7 @@ class SettingsTabView(QWidget):
         self.mcp_table = QTableWidget()
         self.mcp_table.setColumnCount(4)
         self.mcp_table.setHorizontalHeaderLabels([
-            "Name", "URL", "Enabled", "Transport"
+            "Name", "Target", "Enabled", "Transport"
         ])
 
         # Configure table
@@ -438,13 +438,13 @@ class SettingsTabView(QWidget):
         # Update active provider combo
         self.active_provider_combo.addItem(name)
 
-    def add_mcp_provider(self, name, url, enabled=True, transport="streamablehttp"):
+    def add_mcp_provider(self, name, target, enabled=True, transport="streamablehttp"):
         """Add an MCP provider to the table"""
         row_count = self.mcp_table.rowCount()
         self.mcp_table.insertRow(row_count)
 
         self.mcp_table.setItem(row_count, 0, QTableWidgetItem(name))
-        self.mcp_table.setItem(row_count, 1, QTableWidgetItem(url))
+        self.mcp_table.setItem(row_count, 1, QTableWidgetItem(target))
 
         enabled_checkbox = QCheckBox()
         enabled_checkbox.setChecked(enabled)

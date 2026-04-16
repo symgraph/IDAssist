@@ -114,6 +114,10 @@ class SettingsService:
                         url TEXT NOT NULL,
                         enabled BOOLEAN DEFAULT 1,
                         transport TEXT DEFAULT 'streamablehttp',
+                        command TEXT DEFAULT '',
+                        args TEXT DEFAULT '[]',
+                        env TEXT DEFAULT '{}',
+                        cwd TEXT DEFAULT '',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
@@ -140,6 +144,7 @@ class SettingsService:
                 migrate_add_reasoning_effort,
                 migrate_add_litellm_configs,
                 migrate_add_provider_timeout,
+                migrate_add_mcp_stdio_fields,
                 migrate_provider_type_names
             )
             from .migrations.add_oauth_credentials import migrate_add_oauth_credentials
@@ -148,6 +153,7 @@ class SettingsService:
             migrate_add_reasoning_effort(self._db_path)
             migrate_add_litellm_configs(self._db_path)
             migrate_add_provider_timeout(self._db_path)
+            migrate_add_mcp_stdio_fields(self._db_path)
             migrate_add_oauth_credentials(self._db_path)
             migrate_provider_type_names(self._db_path)
             migrate_add_bypass_proxy(self._db_path)
@@ -616,16 +622,35 @@ class SettingsService:
 
     # MCP Provider Operations
 
-    def add_mcp_provider(self, name: str, url: str, enabled: bool = True, transport: str = 'streamablehttp') -> int:
+    def add_mcp_provider(
+        self,
+        name: str,
+        url: str,
+        enabled: bool = True,
+        transport: str = 'streamablehttp',
+        command: str = '',
+        args: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = None,
+        cwd: str = ''
+    ) -> int:
         """Add a new MCP provider"""
         with self._db_lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO mcp_providers (name, url, enabled, transport)
-                    VALUES (?, ?, ?, ?)
-                ''', (name, url, enabled, transport))
+                    INSERT INTO mcp_providers (name, url, enabled, transport, command, args, env, cwd)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    name,
+                    url,
+                    enabled,
+                    transport,
+                    command,
+                    json.dumps(args or []),
+                    json.dumps(env or {}),
+                    cwd
+                ))
 
                 provider_id = cursor.lastrowid
                 conn.commit()
@@ -646,7 +671,7 @@ class SettingsService:
             try:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, name, url, enabled, transport
+                    SELECT id, name, url, enabled, transport, command, args, env, cwd
                     FROM mcp_providers ORDER BY name
                 ''')
 
@@ -657,7 +682,11 @@ class SettingsService:
                         'name': row[1],
                         'url': row[2],
                         'enabled': bool(row[3]),
-                        'transport': row[4]
+                        'transport': row[4],
+                        'command': row[5] or '',
+                        'args': self._deserialize_value(row[6] or '[]', 'json'),
+                        'env': self._deserialize_value(row[7] or '{}', 'json'),
+                        'cwd': row[8] or ''
                     })
 
                 return providers
@@ -669,11 +698,16 @@ class SettingsService:
 
     def update_mcp_provider(self, provider_id: int, **kwargs) -> bool:
         """Update an MCP provider"""
-        valid_fields = {'name', 'url', 'enabled', 'transport'}
+        valid_fields = {'name', 'url', 'enabled', 'transport', 'command', 'args', 'env', 'cwd'}
         update_fields = {k: v for k, v in kwargs.items() if k in valid_fields}
 
         if not update_fields:
             return False
+
+        if 'args' in update_fields:
+            update_fields['args'] = json.dumps(update_fields['args'] or [])
+        if 'env' in update_fields:
+            update_fields['env'] = json.dumps(update_fields['env'] or {})
 
         with self._db_lock:
             conn = self._get_connection()
