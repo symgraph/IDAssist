@@ -105,6 +105,16 @@ def get_binary_hash():
         if not _IN_IDA:
             return ""
 
+        # Prefer the original input SHA-256 stored in the IDB so detached
+        # .i64/.idb databases still resolve to the correct binary identity.
+        retrieve_input_sha256 = getattr(ida_nalt, "retrieve_input_file_sha256", None)
+        if callable(retrieve_input_sha256):
+            sha256_bytes = retrieve_input_sha256()
+            if sha256_bytes:
+                sha256_hex = sha256_bytes.hex()
+                log.log_debug("Resolved binary hash from stored IDB input SHA-256")
+                return sha256_hex
+
         input_path = ida_nalt.get_input_file_path()
         if not input_path or not os.path.exists(input_path):
             return ""
@@ -113,7 +123,9 @@ def get_binary_hash():
         with open(input_path, "rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):
                 sha256.update(chunk)
-        return sha256.hexdigest()
+        sha256_hex = sha256.hexdigest()
+        log.log_debug("Resolved binary hash from input file path")
+        return sha256_hex
 
     except Exception as e:
         log.log_error(f"Failed to compute binary hash: {e}")
