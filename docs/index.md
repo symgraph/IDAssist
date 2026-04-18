@@ -28,7 +28,7 @@ IDAssist organizes its functionality into seven tabs:
 
 ### MCP Tool Integration
 
-IDAssist provides built-in internal tools — function lookup, disassembly, pseudocode, cross-references, renaming, and graph queries — that LLMs can invoke during reasoning via function calling. You can also connect to external MCP servers for additional tool capabilities.
+IDAssist provides built-in internal tools — function lookup, disassembly, pseudocode, cross-references, renaming, and graph queries — that LLMs can invoke during reasoning via function calling. You can also connect to external MCP servers for additional tool capabilities, including URL-based and stdio-launched MCP servers.
 
 ### ReAct Agent
 

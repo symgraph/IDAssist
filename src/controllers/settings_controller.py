@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 import asyncio
+import json
+import os
+import shlex
 from ..qt_compat import (QMessageBox, QInputDialog, QDialog, QVBoxLayout, QHBoxLayout,
                          QLabel, QLineEdit, QPushButton, QCheckBox, QSpinBox, QComboBox,
                          QObject, QThread, Signal, exec_dialog)
@@ -21,6 +24,33 @@ from ..services.symgraph_service import symgraph_service, SymGraphAuthError, Sym
 from ..views.settings_tab_view import SettingsTabView
 
 PROVIDER_WORKER_TIMEOUT_BUFFER_SECONDS = 5.0
+
+
+def parse_mcp_args(raw_args):
+    """Parse MCP stdio args from a UI string."""
+    value = (raw_args or "").strip()
+    if not value:
+        return []
+
+    if value.startswith("["):
+        parsed = json.loads(value)
+        if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+            raise ValueError("Args JSON must be an array of strings.")
+        return parsed
+
+    return shlex.split(value, posix=(os.name != "nt"))
+
+
+def parse_mcp_env(raw_env):
+    """Parse MCP stdio environment variables from a UI string."""
+    value = (raw_env or "").strip()
+    if not value:
+        return {}
+
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in parsed.items()):
+        raise ValueError("Environment JSON must be an object of string keys and string values.")
+    return parsed
 
 
 def validate_provider_test_config(provider_config):
@@ -311,12 +341,16 @@ class MCPTestWorker(QThread):
         try:
             log.log_info(f"Testing MCP server '{server_name}'...")
 
-            transport_type = self.server_config.get('transport', 'sse')
+            transport_type = self.server_config.get('transport', 'streamablehttp')
 
             config = MCPServerConfig(
                 name=self.server_config['name'],
                 transport_type=transport_type,
-                url=self.server_config['url'],
+                url=self.server_config.get('url'),
+                command=self.server_config.get('command'),
+                args=self.server_config.get('args'),
+                env=self.server_config.get('env'),
+                cwd=self.server_config.get('cwd'),
                 enabled=self.server_config.get('enabled', True),
                 timeout=30.0
             )
@@ -352,6 +386,8 @@ class MCPTestWorker(QThread):
                     error_message += "\n- Verify the server supports MCP over SSE"
                 elif "connection refused" in result.error.lower():
                     error_message += "\n\nSuggestion: Check if the server is running on the specified port"
+                elif transport_type == "stdio":
+                    error_message += "\n\nSuggestion: Verify the command, working directory, and PATH/environment values."
 
                 self.test_completed.emit(False, error_message, {})
 
@@ -1309,23 +1345,46 @@ class MCPProviderDialog(QDialog):
     def setup_ui(self):
         self.setWindowTitle("MCP Provider" if not self.provider_data else f"Edit {self.provider_data.get('name', 'Provider')}")
         self.setModal(True)
-        self.resize(400, 300)
+        self.resize(480, 360)
 
         layout = QVBoxLayout()
 
-        layout.addWidget(QLabel("Name:"))
+        self.name_label = QLabel("Name:")
+        layout.addWidget(self.name_label)
         self.name_edit = QLineEdit()
         layout.addWidget(self.name_edit)
-
-        layout.addWidget(QLabel("URL:"))
-        self.url_edit = QLineEdit()
-        layout.addWidget(self.url_edit)
 
         layout.addWidget(QLabel("Transport:"))
         self.transport_combo = QComboBox()
         self.transport_combo.addItem("SSE (HTTP)", "sse")
         self.transport_combo.addItem("Streamable HTTP", "streamablehttp")
+        self.transport_combo.addItem("Stdio (CLI Process)", "stdio")
         layout.addWidget(self.transport_combo)
+
+        self.url_label = QLabel("URL:")
+        layout.addWidget(self.url_label)
+        self.url_edit = QLineEdit()
+        layout.addWidget(self.url_edit)
+
+        self.command_label = QLabel("Command:")
+        layout.addWidget(self.command_label)
+        self.command_edit = QLineEdit()
+        layout.addWidget(self.command_edit)
+
+        self.args_label = QLabel("Arguments:")
+        layout.addWidget(self.args_label)
+        self.args_edit = QLineEdit()
+        layout.addWidget(self.args_edit)
+
+        self.cwd_label = QLabel("Working Directory:")
+        layout.addWidget(self.cwd_label)
+        self.cwd_edit = QLineEdit()
+        layout.addWidget(self.cwd_edit)
+
+        self.env_label = QLabel("Environment JSON:")
+        layout.addWidget(self.env_label)
+        self.env_edit = QLineEdit()
+        layout.addWidget(self.env_edit)
 
         self.transport_combo.currentTextChanged.connect(self.on_transport_changed)
         self.on_transport_changed()
@@ -1350,18 +1409,41 @@ class MCPProviderDialog(QDialog):
     def on_transport_changed(self):
         """Handle transport type change"""
         transport_data = self.transport_combo.currentData()
+        is_stdio = transport_data == "stdio"
+
+        self.url_label.setVisible(not is_stdio)
+        self.url_edit.setVisible(not is_stdio)
+        self.command_label.setVisible(is_stdio)
+        self.command_edit.setVisible(is_stdio)
+        self.args_label.setVisible(is_stdio)
+        self.args_edit.setVisible(is_stdio)
+        self.cwd_label.setVisible(is_stdio)
+        self.cwd_edit.setVisible(is_stdio)
+        self.env_label.setVisible(is_stdio)
+        self.env_edit.setVisible(is_stdio)
+
         if transport_data == "sse":
             self.url_edit.setPlaceholderText("e.g., http://localhost:8000/sse")
-        else:
+        elif transport_data == "streamablehttp":
             self.url_edit.setPlaceholderText("e.g., http://localhost:8000/mcp")
+        else:
+            self.command_edit.setPlaceholderText("e.g., npx")
+            self.args_edit.setPlaceholderText("e.g., -y @modelcontextprotocol/server-filesystem C:\\work")
+            self.cwd_edit.setPlaceholderText("Optional process working directory")
+            self.env_edit.setPlaceholderText('Optional JSON, e.g. {"API_KEY":"value"}')
 
     def populate_fields(self):
         """Populate fields with existing provider data"""
         if self.provider_data:
             self.name_edit.setText(self.provider_data.get('name', ''))
             self.url_edit.setText(self.provider_data.get('url', ''))
+            self.command_edit.setText(self.provider_data.get('command', ''))
+            self.args_edit.setText(' '.join(self.provider_data.get('args', [])))
+            env_data = self.provider_data.get('env', {})
+            self.env_edit.setText(json.dumps(env_data) if env_data else '')
+            self.cwd_edit.setText(self.provider_data.get('cwd', ''))
 
-            raw_transport = self.provider_data.get('transport', 'sse').lower().strip()
+            raw_transport = self.provider_data.get('transport', 'streamablehttp').lower().strip()
             # Normalize legacy transport values
             transport_map = {'http': 'streamablehttp', 'streamable_http': 'streamablehttp'}
             transport_value = transport_map.get(raw_transport, raw_transport)
@@ -1374,9 +1456,15 @@ class MCPProviderDialog(QDialog):
 
     def get_provider_data(self):
         """Get the provider data from the form"""
+        args = parse_mcp_args(self.args_edit.text())
+        env = parse_mcp_env(self.env_edit.text())
         return {
             'name': self.name_edit.text().strip(),
             'url': self.url_edit.text().strip(),
+            'command': self.command_edit.text().strip(),
+            'args': args,
+            'env': env,
+            'cwd': self.cwd_edit.text().strip(),
             'transport': self.transport_combo.currentData(),
             'enabled': self.enabled_check.isChecked()
         }
@@ -1453,8 +1541,9 @@ class SettingsController(QObject):
 
             mcp_providers = self.service.get_mcp_providers()
             for provider in mcp_providers:
+                target = provider['command'] if provider.get('transport') == 'stdio' else provider['url']
                 self.view.add_mcp_provider(
-                    provider['name'], provider['url'],
+                    provider['name'], target,
                     provider['enabled'], provider['transport']
                 )
 
@@ -1675,12 +1764,22 @@ class SettingsController(QObject):
         if exec_dialog(dialog) == QDialog.Accepted:
             try:
                 data = dialog.get_provider_data()
-                if not all([data['name'], data['url']]):
-                    self.show_error("Validation Error", "Name and URL are required fields.")
+                if not data['name']:
+                    self.show_error("Validation Error", "Name is required.")
+                    return
+                if data['transport'] == 'stdio' and not data['command']:
+                    self.show_error("Validation Error", "Command is required for stdio MCP providers.")
+                    return
+                if data['transport'] != 'stdio' and not data['url']:
+                    self.show_error("Validation Error", "URL is required for HTTP MCP providers.")
                     return
 
-                provider_id = self.service.add_mcp_provider(
-                    data['name'], data['url'], data['enabled'], data['transport']
+                self.service.add_mcp_provider(
+                    data['name'], data['url'], data['enabled'], data['transport'],
+                    command=data.get('command', ''),
+                    args=data.get('args', []),
+                    env=data.get('env', {}),
+                    cwd=data.get('cwd', '')
                 )
                 self.load_initial_data()
                 self.show_info("Success", f"Added MCP provider '{data['name']}'")
@@ -1702,8 +1801,14 @@ class SettingsController(QObject):
 
             if exec_dialog(dialog) == QDialog.Accepted:
                 data = dialog.get_provider_data()
-                if not all([data['name'], data['url']]):
-                    self.show_error("Validation Error", "Name and URL are required fields.")
+                if not data['name']:
+                    self.show_error("Validation Error", "Name is required.")
+                    return
+                if data['transport'] == 'stdio' and not data['command']:
+                    self.show_error("Validation Error", "Command is required for stdio MCP providers.")
+                    return
+                if data['transport'] != 'stdio' and not data['url']:
+                    self.show_error("Validation Error", "URL is required for HTTP MCP providers.")
                     return
                 self.service.update_mcp_provider(provider['id'], **data)
                 self.load_initial_data()
@@ -1723,7 +1828,11 @@ class SettingsController(QObject):
             new_name = provider['name'] + " - Copy"
             self.service.add_mcp_provider(
                 new_name, provider['url'],
-                provider.get('enabled', True), provider.get('transport', 'sse')
+                provider.get('enabled', True), provider.get('transport', 'sse'),
+                command=provider.get('command', ''),
+                args=provider.get('args', []),
+                env=provider.get('env', {}),
+                cwd=provider.get('cwd', '')
             )
             self.load_initial_data()
             self.show_info("Success", f"Duplicated MCP provider as '{new_name}'")
@@ -1760,7 +1869,12 @@ class SettingsController(QObject):
                 return
             provider = providers[row]
 
-            if not provider.get('url'):
+            if provider.get('transport') == 'stdio' and not provider.get('command'):
+                self.view.set_mcp_test_status('failure',
+                    f"Provider '{provider['name']}' has no command configured.")
+                return
+
+            if provider.get('transport') != 'stdio' and not provider.get('url'):
                 self.view.set_mcp_test_status('failure',
                     f"Provider '{provider['name']}' has no URL configured.")
                 return

@@ -81,9 +81,9 @@ When adding or editing a provider:
 | Column | Description |
 |--------|-------------|
 | **Name** | Unique name for the MCP server. |
-| **URL** | Server endpoint (e.g., `http://localhost:3000`). |
+| **Target** | HTTP endpoint for network transports, or the CLI command for stdio transports. |
 | **Enabled** | Whether this MCP server is active. |
-| **Transport** | Connection type (HTTP/SSE). |
+| **Transport** | Connection type (`SSE`, `Streamable HTTP`, or `Stdio`). |
 
 ### MCP Management Buttons
 
@@ -93,6 +93,23 @@ When adding or editing a provider:
 | **Edit** | Modify the selected MCP server's settings. |
 | **Delete** | Remove the selected MCP server. |
 | **Test** | Verify connectivity to the MCP server. |
+
+### MCP Transport Modes
+
+Use one of these transport styles when adding an MCP provider:
+
+| Transport | Required Fields | Notes |
+|----------|-----------------|-------|
+| `sse` | `URL` | For MCP servers exposed over SSE, such as `http://localhost:8000/sse`. |
+| `streamablehttp` | `URL` | For MCP servers exposed over streamable HTTP, such as `http://localhost:8000/mcp`. |
+| `stdio` | `Command` | Starts a local MCP server process and talks to it over stdin/stdout. |
+
+For `stdio` providers, the dialog also supports:
+- **Arguments**: Command-line arguments. Enter either shell-style arguments or a JSON string array.
+- **Working Directory**: Optional process working directory.
+- **Environment JSON**: Optional JSON object of environment variables, for example `{"API_KEY":"value"}`.
+
+On Windows, stdio MCP providers also require `pywin32` in the same Python environment as IDA because the MCP SDK uses Windows Job Objects for child-process management.
 
 ## System Prompt
 
