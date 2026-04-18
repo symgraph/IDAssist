@@ -7,6 +7,16 @@ Consumer files should use explicit imports:
 """
 
 try:
+    # PySide6 6.8.0 contains a known crash bug (spyder-ide/qtpy#494).
+    # Read the version from package metadata (no import needed) and skip
+    # the broken release so the PyQt5 fallback is used instead.
+    try:
+        from importlib.metadata import version as _pkg_version
+        if _pkg_version("PySide6") == "6.8.0":
+            raise ImportError("PySide6 6.8.0 is known to crash IDA Pro; falling back to PyQt5")
+    except Exception as _e:
+        if "6.8.0" in str(_e):
+            raise
     from PySide6.QtCore import *      # noqa: F401,F403
     from PySide6.QtGui import *       # noqa: F401,F403
     from PySide6.QtWidgets import *   # noqa: F401,F403
