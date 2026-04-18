@@ -62,9 +62,9 @@ class FunctionSummaryService:
             log.log_warn("No context service available for prompt generation")
             return None
 
-        # Get context for the function
-        self._context_service.set_current_offset(func_address)
-        context = self._context_service.get_current_context()
+        # Build context for the target function explicitly. The semantic-analysis
+        # worker runs off the UI thread, so screen-EA-based lookups are unreliable.
+        context = self._context_service.get_context_for_address(func_address)
 
         if context.get("error"):
             log.log_warn(f"Context error: {context['error']}")

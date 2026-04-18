@@ -69,15 +69,10 @@ class BinaryContextService:
         """Get the cached binary hash."""
         return self._cached_binary_hash
 
-    def get_current_context(self) -> Dict[str, Any]:
-        """Get complete context snapshot for current state"""
-        if not _IN_IDA:
-            return {"error": "Not running inside IDA Pro"}
-
-        # Update current offset from IDA cursor
-        self._current_offset = ida_kernwin.get_screen_ea()
-
-        context = {
+    def _build_context_snapshot(self, address: int) -> Dict[str, Any]:
+        """Build a context snapshot for a specific address on IDA's main thread."""
+        self._current_offset = address
+        return {
             "offset": self._current_offset,
             "offset_hex": f"0x{self._current_offset:x}",
             "current_view_level": self.get_current_view_level().value,
@@ -86,7 +81,40 @@ class BinaryContextService:
             "view_capabilities": self._get_view_capabilities(),
         }
 
-        return context
+    def get_current_context(self) -> Dict[str, Any]:
+        """Get complete context snapshot for current state"""
+        if not _IN_IDA:
+            return {"error": "Not running inside IDA Pro"}
+
+        context_holder = [{"error": "Failed to read current IDA context"}]
+
+        def _do():
+            try:
+                current_ea = ida_kernwin.get_screen_ea()
+                context_holder[0] = self._build_context_snapshot(current_ea)
+            except Exception as e:
+                context_holder[0] = {"error": f"Failed to get current context: {e}"}
+
+        execute_on_main_thread(_do)
+        return context_holder[0]
+
+    def get_context_for_address(self, address: int) -> Dict[str, Any]:
+        """Get complete context snapshot for an explicit address."""
+        if not _IN_IDA:
+            return {"error": "Not running inside IDA Pro"}
+        if address is None:
+            return {"error": "No address provided"}
+
+        context_holder = [{"error": f"Failed to read IDA context at 0x{address:x}"}]
+
+        def _do():
+            try:
+                context_holder[0] = self._build_context_snapshot(address)
+            except Exception as e:
+                context_holder[0] = {"error": f"Failed to get context for 0x{address:x}: {e}"}
+
+        execute_on_main_thread(_do)
+        return context_holder[0]
 
     def _get_binary_info(self) -> Dict[str, Any]:
         """Extract basic binary metadata from IDA"""
