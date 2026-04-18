@@ -567,6 +567,30 @@ class OpenAIOAuthProvider(BaseLLMProvider):
                 tool_calls.append(tool_call)
                 finish_reason = "tool_calls"
 
+        # Some Responses API completions only surface assistant text via streamed
+        # output_text delta events and leave the final response.output empty.
+        if not text_content:
+            text_content = response_data.get("_collected_text", "")
+
+        for item in response_data.get("_collected_tool_calls", []):
+            try:
+                arguments = item.get("arguments", "{}")
+                if isinstance(arguments, str):
+                    arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+
+            call_id = item.get("call_id", item.get("id", ""))
+            if any(existing.id == call_id for existing in tool_calls):
+                continue
+
+            tool_calls.append(ToolCall(
+                id=call_id,
+                name=item.get("name", ""),
+                arguments=arguments
+            ))
+            finish_reason = "tool_calls"
+
         # Check status for finish reason
         status = response_data.get("status", "completed")
         if status == "incomplete":
@@ -588,6 +612,8 @@ class OpenAIOAuthProvider(BaseLLMProvider):
             Complete response data dict
         """
         final_response = {}
+        collected_text_parts: List[str] = []
+        collected_tool_calls: List[Dict[str, Any]] = []
 
         async for line in response.content:
             line = line.decode('utf-8').strip()
@@ -609,9 +635,23 @@ class OpenAIOAuthProvider(BaseLLMProvider):
 
                 event_type = event_data.get("type", "")
 
+                if event_type == "response.output_text.delta":
+                    delta_text = event_data.get("delta", "")
+                    if delta_text:
+                        collected_text_parts.append(delta_text)
+                elif event_type == "response.output_item.done":
+                    item = event_data.get("item", {})
+                    if item.get("type") == "function_call":
+                        collected_tool_calls.append(item)
+
                 # Capture the final response
                 if event_type in ("response.completed", "response.done"):
                     final_response = event_data.get("response", {})
+
+        if collected_text_parts:
+            final_response["_collected_text"] = "".join(collected_text_parts)
+        if collected_tool_calls:
+            final_response["_collected_tool_calls"] = collected_tool_calls
 
         return final_response
 
