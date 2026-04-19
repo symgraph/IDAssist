@@ -199,13 +199,6 @@ class SettingsService:
                 'category': 'ui'
             },
 
-            # SymGraph feature flag
-            'symgraph_enabled': {
-                'value': '0',
-                'type': 'boolean',
-                'category': 'symgraph'
-            },
-
             # SymGraph settings
             'symgraph_api_url': {
                 'value': 'https://api.SymGraph',
@@ -888,10 +881,6 @@ class SettingsService:
             return False
 
     # SymGraph Settings
-
-    def is_symgraph_enabled(self) -> bool:
-        """Check if the SymGraph feature is enabled"""
-        return self.get_setting('symgraph_enabled', False)
 
     def get_symgraph_api_url(self) -> str:
         """Get the SymGraph API URL"""

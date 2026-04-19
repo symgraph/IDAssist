@@ -105,8 +105,7 @@ class IDAssistForm(idaapi.PluginForm):
             self._init_query_tab()
             self._init_actions_tab()
             self._init_semantic_graph_tab()
-            if self._is_symgraph_enabled():
-                self._init_symgraph_tab()
+            self._init_symgraph_tab()
             self._init_rag_tab()
             self._init_settings_tab()
 
@@ -266,16 +265,6 @@ class IDAssistForm(idaapi.PluginForm):
             self.tabs.addTab(self.rag_view, "RAG")
         except Exception as e:
             log.log_error(f"Failed to init RAG tab: {e}")
-
-    def _is_symgraph_enabled(self) -> bool:
-        """Check if SymGraph feature is enabled in settings."""
-        try:
-            from src.services.service_registry import get_service_registry
-            registry = get_service_registry()
-            settings = registry.get_settings_service()
-            return settings.is_symgraph_enabled()
-        except Exception:
-            return False
 
     def _init_symgraph_tab(self):
         """Initialize the SymGraph tab."""
