@@ -22,6 +22,7 @@ IDAssist organizes its functionality into seven tabs:
 | **[Actions](tabs/actions-tab.md)** | AI-powered rename and retype suggestions with confidence scores |
 | **[Semantic Graph](tabs/semantic-graph-tab.md)** | Knowledge graph with visual explorer, search, and community detection |
 | **[RAG](tabs/rag-tab.md)** | Upload reference documents for context-enriched analysis |
+| **[SymGraph](tabs/symgraph-tab.md)** | Compare against SymGraph, import shared analysis, and publish your own revisions |
 | **[Settings](tabs/settings-tab.md)** | Configure LLM providers, MCP servers, SymGraph credentials, system prompt, and database paths |
 
 ## Key Features
@@ -119,4 +120,5 @@ Detailed reference for each tab's UI elements and capabilities:
 - [Actions Tab](tabs/actions-tab.md)
 - [Semantic Graph Tab](tabs/semantic-graph-tab.md)
 - [RAG Tab](tabs/rag-tab.md)
+- [SymGraph Tab](tabs/symgraph-tab.md)
 - [Settings Tab](tabs/settings-tab.md)

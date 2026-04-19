@@ -111,6 +111,19 @@ For `stdio` providers, the dialog also supports:
 
 On Windows, stdio MCP providers also require `pywin32` in the same Python environment as IDA because the MCP SDK uses Windows Job Objects for child-process management.
 
+## SymGraph
+
+The SymGraph section configures the remote service used by the [SymGraph Tab](symgraph-tab.md).
+
+Fields and actions:
+
+- **API URL**: SymGraph server URL for the hosted service or a self-hosted instance
+- **API Key**: Required for uploading binaries, importing shared analysis, and publishing revisions
+- **Show / Hide**: Toggle API-key visibility
+- **Test**: Verify connectivity and credentials
+
+`Refresh` in the SymGraph tab can check whether a binary exists without an API key, but upload, import, and publish operations require one. IDAssist can only upload the raw binary when the original input file path is still available on disk.
+
 ## System Prompt
 
 A large text area for customizing the system prompt sent to the LLM with every request. The default prompt instructs the model to behave as a binary analysis assistant. Modify this to:
@@ -135,4 +148,5 @@ Each field has a **Browse** button to select a custom path. The settings themsel
 - [Getting Started](../getting-started.md) — Initial provider setup walkthrough
 - [Explain Tab](explain-tab.md) — Uses the active LLM provider
 - [Query Tab](query-tab.md) — Uses the active LLM provider and MCP servers
+- [SymGraph Tab](symgraph-tab.md) — Uses the SymGraph credentials configured here
 - [RAG Tab](rag-tab.md) — Uses the RAG index path configured here
