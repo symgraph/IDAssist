@@ -117,6 +117,16 @@ class LLMProviderFactory:
         except ImportError:
             pass  # Anthropic Platform API provider not available
 
+        # AWS Bedrock provider
+        try:
+            from .bedrock_provider import BedrockProviderFactory
+            self.register_factory(
+                ProviderType.BEDROCK,
+                BedrockProviderFactory()
+            )
+        except ImportError:
+            pass  # AWS Bedrock provider not available
+
         # LiteLLM proxy provider
         try:
             self.register_factory(

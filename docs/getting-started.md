@@ -116,6 +116,28 @@ Use LiteLLM to route through multiple providers with a single endpoint.
    - **API Key:** your proxy key (if required)
 3. Click **Save**, then set as **Active Provider**
 
+### Option 5: AWS Bedrock
+
+Use AWS Bedrock Converse API directly via boto3. Requires an AWS account with Bedrock access.
+
+1. Ensure you have **AWS credentials** configured (env vars, `~/.aws/credentials`, or IAM role)
+2. In IDAssist Settings, click **Add**:
+   - **Name:** `AWS Bedrock`
+   - **Type:** `bedrock`
+   - **Model:** e.g., `anthropic.claude-sonnet-4-6`
+   - **AWS Region:** e.g., `us-east-1`
+   - **AWS Profile:** (optional) named profile from credentials file
+   - **AWS Access Key / Secret Key:** (optional) overrides credential chain
+3. Click **Save**, then set as **Active Provider**
+
+> Available Bedrock model IDs: [docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html)
+>
+> **Note:** AWS Bedrock has its own service quotas (requests per minute, tokens per minute per model) and separate pricing per model. Check your quota limits and costs at:
+> - Pricing: [aws.amazon.com/bedrock/pricing](https://aws.amazon.com/bedrock/pricing/)
+> - Quotas: [docs.aws.amazon.com/bedrock/latest/userguide/quotas.html](https://docs.aws.amazon.com/bedrock/latest/userguide/quotas.html)
+>
+> It is your responsibility to monitor usage and ensure you operate within your allocated quotas.
+
 ### Setting the Active Provider
 
 After adding a provider, select it from the **Active Provider** dropdown in the Settings tab. Only one provider is active at a time. You can switch providers at any time — the active provider is used for all Explain, Query, and Actions operations.

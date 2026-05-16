@@ -40,6 +40,9 @@ class ProviderType(Enum):
     OPENAI_OAUTH = "openai_oauth"             # OAuth (ChatGPT Pro/Plus subscription)
     OPENAI_PLATFORM = "openai_platform"       # Platform API (direct API key)
 
+    # AWS Bedrock provider
+    BEDROCK = "bedrock"                       # AWS Bedrock Converse API
+
     # X.ai providers
     XAI_PLATFORM = "xai_platform"             # Platform API (direct API key)
 
@@ -50,6 +53,8 @@ class ProviderType(Enum):
             # Anthropic
             cls.ANTHROPIC_CLI: "Anthropic CLI (Claude Code)",
             cls.ANTHROPIC_PLATFORM: "Anthropic Platform API",
+            # AWS Bedrock
+            cls.BEDROCK: "AWS Bedrock",
             # Gemini
             cls.GEMINI_OAUTH: "Gemini OAuth (Gemini CLI)",
             cls.GEMINI_PLATFORM: "Gemini Platform API",
@@ -72,6 +77,8 @@ class ProviderType(Enum):
             # Anthropic
             cls.ANTHROPIC_CLI: "",  # CLI-based, no URL needed
             cls.ANTHROPIC_PLATFORM: "https://api.anthropic.com",
+            # AWS Bedrock
+            cls.BEDROCK: "",  # Uses boto3 client, no URL needed
             # Gemini
             cls.GEMINI_OAUTH: "https://cloudcode-pa.googleapis.com",
             cls.GEMINI_PLATFORM: "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -98,6 +105,12 @@ class ProviderType(Enum):
             cls.ANTHROPIC_PLATFORM: [
                 "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
                 "claude-3-opus-20240229", "claude-3-sonnet-20240229"
+            ],
+            # AWS Bedrock
+            cls.BEDROCK: [
+                "anthropic.claude-sonnet-4-6", "anthropic.claude-haiku-4-5",
+                "anthropic.claude-opus-4-5", "amazon.nova-pro-v1:0",
+                "amazon.nova-lite-v1:0", "meta.llama3-3-70b-instruct-v1:0",
             ],
             # Gemini
             cls.GEMINI_OAUTH: [
@@ -153,6 +166,7 @@ class ProviderType(Enum):
         return provider_type in {
             cls.ANTHROPIC_CLI,       # Via CLI --allowedTools flag
             cls.ANTHROPIC_PLATFORM,  # Full tool calling support
+            cls.BEDROCK,             # Converse API supports tool use
             cls.GEMINI_OAUTH,        # Full tool calling support
             cls.GEMINI_PLATFORM,     # Full tool calling support
             cls.LITELLM,             # Proxies tool calls
@@ -170,6 +184,7 @@ class ProviderType(Enum):
         return provider_type in {
             # Note: ANTHROPIC_CLI does NOT support true streaming
             cls.ANTHROPIC_PLATFORM,
+            cls.BEDROCK,             # ConverseStream API
             cls.GEMINI_OAUTH,
             cls.GEMINI_PLATFORM,
             cls.LITELLM,

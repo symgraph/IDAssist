@@ -145,6 +145,7 @@ class SettingsService:
                 migrate_add_litellm_configs,
                 migrate_add_provider_timeout,
                 migrate_add_mcp_stdio_fields,
+                migrate_add_aws_bedrock_config,
                 migrate_provider_type_names
             )
             from .migrations.add_oauth_credentials import migrate_add_oauth_credentials
@@ -157,6 +158,7 @@ class SettingsService:
             migrate_add_oauth_credentials(self._db_path)
             migrate_provider_type_names(self._db_path)
             migrate_add_bypass_proxy(self._db_path)
+            migrate_add_aws_bedrock_config(self._db_path)
         except Exception as e:
             # Migration failures shouldn't prevent plugin loading
             try:
@@ -355,7 +357,9 @@ class SettingsService:
     def add_llm_provider(self, name: str, model: str, url: str, max_tokens: int = 4096,
                         api_key: str = '', disable_tls: bool = False, provider_type: str = 'openai_platform',
                         reasoning_effort: str = 'none', bypass_proxy: bool = False,
-                        timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS) -> int:
+                        timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+                        aws_region: str = '', aws_profile: str = '',
+                        aws_access_key_id: str = '', aws_secret_access_key: str = '') -> int:
         """Add a new LLM provider"""
         model_family = 'unknown'
         is_bedrock = False
@@ -369,9 +373,9 @@ class SettingsService:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO llm_providers
-                    (name, model, url, max_tokens, api_key, disable_tls, provider_type, reasoning_effort, model_family, is_bedrock, litellm_params, timeout, bypass_proxy)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (name, model, url, max_tokens, api_key, disable_tls, provider_type, reasoning_effort, model_family, is_bedrock, '{}', timeout, bypass_proxy))
+                    (name, model, url, max_tokens, api_key, disable_tls, provider_type, reasoning_effort, model_family, is_bedrock, litellm_params, timeout, bypass_proxy, aws_region, aws_profile, aws_access_key_id, aws_secret_access_key)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (name, model, url, max_tokens, api_key, disable_tls, provider_type, reasoning_effort, model_family, is_bedrock, '{}', timeout, bypass_proxy, aws_region, aws_profile, aws_access_key_id, aws_secret_access_key))
 
                 provider_id = cursor.lastrowid
                 conn.commit()
@@ -392,7 +396,7 @@ class SettingsService:
             try:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, name, model, url, max_tokens, api_key, disable_tls, provider_type, is_active, reasoning_effort, timeout, bypass_proxy
+                    SELECT id, name, model, url, max_tokens, api_key, disable_tls, provider_type, is_active, reasoning_effort, timeout, bypass_proxy, aws_region, aws_profile, aws_access_key_id, aws_secret_access_key
                     FROM llm_providers ORDER BY name
                 ''')
 
@@ -410,7 +414,11 @@ class SettingsService:
                         'is_active': bool(row[8]),
                         'reasoning_effort': row[9] if len(row) > 9 else 'none',
                         'timeout': row[10] if len(row) > 10 else DEFAULT_PROVIDER_TIMEOUT_SECONDS,
-                        'bypass_proxy': bool(row[11]) if len(row) > 11 else False
+                        'bypass_proxy': bool(row[11]) if len(row) > 11 else False,
+                        'aws_region': row[12] if len(row) > 12 else '',
+                        'aws_profile': row[13] if len(row) > 13 else '',
+                        'aws_access_key_id': row[14] if len(row) > 14 else '',
+                        'aws_secret_access_key': row[15] if len(row) > 15 else '',
                     })
 
                 return providers
@@ -424,7 +432,8 @@ class SettingsService:
         """Update an LLM provider"""
         valid_fields = {'name', 'model', 'url', 'max_tokens', 'api_key', 'disable_tls', 'bypass_proxy',
                         'provider_type', 'is_active', 'reasoning_effort', 'timeout',
-                        'model_family', 'is_bedrock', 'litellm_params'}
+                        'model_family', 'is_bedrock', 'litellm_params',
+                        'aws_region', 'aws_profile', 'aws_access_key_id', 'aws_secret_access_key'}
         update_fields = {k: v for k, v in kwargs.items() if k in valid_fields}
 
         if not update_fields:

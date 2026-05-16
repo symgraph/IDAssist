@@ -67,6 +67,7 @@ def validate_provider_test_config(provider_config):
         return f"Provider '{provider_name}' has no model configured."
 
     if (provider_type != ProviderType.ANTHROPIC_CLI and
+            provider_type != ProviderType.BEDROCK and
             not ProviderType.uses_oauth(provider_type) and
             not provider_config.get('url', '').strip()):
         return f"Provider '{provider_name}' has no URL configured."
@@ -99,6 +100,7 @@ def get_provider_worker_timeout_seconds(provider_config):
 def supports_live_model_discovery(provider_type):
     """Check whether a provider type supports live model discovery."""
     return provider_type in {
+        ProviderType.BEDROCK,
         ProviderType.OPENAI_PLATFORM,
         ProviderType.XAI_PLATFORM,
         ProviderType.LMSTUDIO,
@@ -491,7 +493,8 @@ class ProviderDialog(QDialog):
     def setup_ui(self):
         self.setWindowTitle("LLM Provider" if not self.provider_data else f"Edit {self.provider_data.get('name', 'Provider')}")
         self.setModal(True)
-        self.resize(450, 430)
+        self.setMinimumWidth(480)
+        self.resize(480, 650)
 
         layout = QVBoxLayout()
 
@@ -571,6 +574,48 @@ class ProviderDialog(QDialog):
         layout.addWidget(self.oauth_note_label)
         self.oauth_note_label.setVisible(False)
 
+        # AWS Bedrock config
+        self.bedrock_note_label = QLabel(
+            "Uses AWS credentials via boto3 credential chain (env vars, ~/.aws/credentials, IAM role).\n"
+            "See: https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html"
+        )
+        self.bedrock_note_label.setStyleSheet("color: #666; font-style: italic; margin-top: 10px;")
+        self.bedrock_note_label.setWordWrap(True)
+        layout.addWidget(self.bedrock_note_label)
+
+        self.aws_region_label = QLabel("AWS Region:")
+        layout.addWidget(self.aws_region_label)
+        self.aws_region_edit = QLineEdit()
+        self.aws_region_edit.setPlaceholderText("us-east-1")
+        layout.addWidget(self.aws_region_edit)
+
+        self.aws_profile_label = QLabel("AWS Profile (optional):")
+        layout.addWidget(self.aws_profile_label)
+        self.aws_profile_edit = QLineEdit()
+        self.aws_profile_edit.setPlaceholderText("default")
+        layout.addWidget(self.aws_profile_edit)
+
+        self.aws_access_key_label = QLabel("AWS Access Key ID (optional):")
+        layout.addWidget(self.aws_access_key_label)
+        self.aws_access_key_edit = QLineEdit()
+        layout.addWidget(self.aws_access_key_edit)
+
+        self.aws_secret_key_label = QLabel("AWS Secret Access Key (optional):")
+        layout.addWidget(self.aws_secret_key_label)
+        self.aws_secret_key_edit = QLineEdit()
+        self.aws_secret_key_edit.setEchoMode(QLineEdit.Password)
+        layout.addWidget(self.aws_secret_key_edit)
+
+        self.bedrock_note_label.setVisible(False)
+        self.aws_region_label.setVisible(False)
+        self.aws_region_edit.setVisible(False)
+        self.aws_profile_label.setVisible(False)
+        self.aws_profile_edit.setVisible(False)
+        self.aws_access_key_label.setVisible(False)
+        self.aws_access_key_edit.setVisible(False)
+        self.aws_secret_key_label.setVisible(False)
+        self.aws_secret_key_edit.setVisible(False)
+
         # Disable TLS
         self.disable_tls_check = QCheckBox("Disable TLS Verification")
         layout.addWidget(self.disable_tls_check)
@@ -647,6 +692,11 @@ class ProviderDialog(QDialog):
             self.disable_tls_check.setChecked(self.provider_data.get('disable_tls', False))
             self.bypass_proxy_check.setChecked(self.provider_data.get('bypass_proxy', False))
 
+            self.aws_region_edit.setText(self.provider_data.get('aws_region', ''))
+            self.aws_profile_edit.setText(self.provider_data.get('aws_profile', ''))
+            self.aws_access_key_edit.setText(self.provider_data.get('aws_access_key_id', ''))
+            self.aws_secret_key_edit.setText(self.provider_data.get('aws_secret_access_key', ''))
+
     def get_provider_data(self):
         """Get the provider data from the form"""
         return {
@@ -658,7 +708,11 @@ class ProviderDialog(QDialog):
             'timeout': self.timeout_spin.value(),
             'api_key': self.key_edit.text(),
             'disable_tls': self.disable_tls_check.isChecked(),
-            'bypass_proxy': self.bypass_proxy_check.isChecked()
+            'bypass_proxy': self.bypass_proxy_check.isChecked(),
+            'aws_region': self.aws_region_edit.text().strip(),
+            'aws_profile': self.aws_profile_edit.text().strip(),
+            'aws_access_key_id': self.aws_access_key_edit.text(),
+            'aws_secret_access_key': self.aws_secret_key_edit.text(),
         }
 
     def _get_current_model_text(self):
@@ -841,6 +895,17 @@ class ProviderDialog(QDialog):
 
                 if is_litellm:
                     self.update_litellm_metadata()
+
+                is_bedrock = provider_type == ProviderType.BEDROCK
+                self.bedrock_note_label.setVisible(is_bedrock)
+                self.aws_region_label.setVisible(is_bedrock)
+                self.aws_region_edit.setVisible(is_bedrock)
+                self.aws_profile_label.setVisible(is_bedrock)
+                self.aws_profile_edit.setVisible(is_bedrock)
+                self.aws_access_key_label.setVisible(is_bedrock)
+                self.aws_access_key_edit.setVisible(is_bedrock)
+                self.aws_secret_key_label.setVisible(is_bedrock)
+                self.aws_secret_key_edit.setVisible(is_bedrock)
 
                 is_claude_code = provider_type == ProviderType.ANTHROPIC_CLI
                 self.claude_code_note_label.setVisible(is_claude_code)

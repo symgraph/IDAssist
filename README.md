@@ -129,6 +129,7 @@ IDAssist supports the following provider types:
 | `anthropic_platform` | API Key | Anthropic API direct |
 | `anthropic_oauth` | OAuth (browser) | Browser-based authentication |
 | `anthropic_claude_cli` | Local CLI | Uses the `claude` CLI binary |
+| `bedrock` | AWS Credentials | Direct AWS Bedrock Converse API |
 | `openai_platform` | API Key | OpenAI API direct |
 | `openai_oauth` | OAuth (browser) | Browser-based authentication |
 | `ollama` | None (local) | Self-hosted models |
