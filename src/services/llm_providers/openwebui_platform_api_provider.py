@@ -30,7 +30,7 @@ from ..models.reasoning_models import ReasoningConfig
 from src.ida_compat import log
 
 
-class OpenAIPlatformApiProvider(BaseLLMProvider):
+class OpenWebUIPlatformApiProvider(BaseLLMProvider):
     """
     OpenAI API provider implementation.
 
@@ -54,11 +54,6 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
         try:
             timeout = self.timeout
 
-            # Handle base_url - use default if not specified or standard OpenAI URL
-            base_url = None
-            if self.url and self.url != 'https://api.openai.com/v1':
-                base_url = self.url
-
             # For local providers that don't need API keys, use a placeholder
             api_key = self.api_key or "not-needed"
 
@@ -78,7 +73,7 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
 
                 self._client = OpenAI(
                     api_key=api_key,
-                    base_url=base_url,
+                    base_url=self.url,
                     timeout=timeout,
                     max_retries=0,  # We handle retries ourselves
                     http_client=http_client
@@ -92,7 +87,7 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
                     log.log_debug("OpenAI: Bypassing system proxy (trust_env=False)")
                 self._client = OpenAI(
                     api_key=api_key,
-                    base_url=base_url,
+                    base_url=self.url,
                     timeout=timeout,
                     max_retries=0,  # We handle retries ourselves
                     http_client=_http_client
@@ -103,12 +98,9 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
 
     def _is_reasoning_model(self) -> bool:
         """Check if the current model is an o* reasoning model."""
+        #TODOcheck if the info can be provided
         model_name = self.model.lower()
-        return (model_name.startswith("o1") or
-                model_name.startswith("o2") or
-                model_name.startswith("o3") or
-                model_name.startswith("o4") or
-                model_name.startswith("gpt-5"))
+        return True
 
     def _prepare_messages(self, messages: List[ChatMessage]) -> List[Dict[str, Any]]:
         """Convert BinAssist ChatMessage objects to OpenAI message format."""
@@ -644,23 +636,10 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
 
     def _get_models_endpoint_candidates(self) -> List[str]:
         """Resolve plausible OpenAI-compatible models endpoints from the configured base URL."""
-        base_url = (self.url or "https://api.openai.com/v1").strip().rstrip("/")
+        base_url = self.url + "/api"
         candidates: List[str] = []
 
-        def add(candidate: str):
-            if candidate and candidate not in candidates:
-                candidates.append(candidate)
-
-        if base_url.endswith("/models"):
-            add(base_url)
-            return candidates
-
-        add(f"{base_url}/models")
-
-        # Some OpenAI-compatible proxies are configured at the service root and
-        # expose models at `/v1/models` even when chat works at a different base.
-        if not base_url.endswith("/v1"):
-            add(f"{base_url}/v1/models")
+        candidates.append(base_url + "/models")
 
         return candidates
 
@@ -747,19 +726,16 @@ class OpenAIPlatformApiProvider(BaseLLMProvider):
 from ..llm_providers.provider_factory import ProviderFactory
 from ..models.provider_types import ProviderType
 
-class OpenAIPlatformApiProviderFactory(ProviderFactory):
+class OpenWebUIPlatformApiProviderFactory(ProviderFactory):
     """Factory for creating OpenAI Platform API provider instances"""
 
-    def create_provider(self, config: Dict[str, Any]) -> OpenAIPlatformApiProvider:
+    def create_provider(self, config: Dict[str, Any]) -> OpenWebUIPlatformApiProvider:
         """Create OpenAI Platform API provider instance"""
-        return OpenAIPlatformApiProvider(config)
+        return OpenWebUIPlatformApiProvider(config)
 
     def supports_provider_type(self, provider_type: ProviderType) -> bool:
         """Check if this factory supports the provider type"""
-        # OpenAI provider handles OpenAI-compatible APIs
+        # OpenAI like providers for special Open WebUI compat
         return provider_type in {
-            ProviderType.OPENAI_PLATFORM,
-            ProviderType.LMSTUDIO,
-            ProviderType.XAI_PLATFORM,
-            ProviderType.GEMINI_PLATFORM,
+            ProviderType.OPENWEBUI,
         }
