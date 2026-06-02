@@ -162,11 +162,17 @@ class LLMProviderFactory:
             openai_factory = OpenAIPlatformApiProviderFactory()
             self.register_factory(ProviderType.OPENAI_PLATFORM, openai_factory)
             self.register_factory(ProviderType.LMSTUDIO, openai_factory)
-            self.register_factory(ProviderType.OPENWEBUI, openai_factory)
             self.register_factory(ProviderType.XAI_PLATFORM, openai_factory)
             self.register_factory(ProviderType.GEMINI_PLATFORM, openai_factory)
         except ImportError:
             pass  # OpenAI Platform API provider not available
+
+        try:
+            from .openwebui_platform_api_provider import OpenWebUIPlatformApiProviderFactory
+            openwebui_factory = OpenWebUIPlatformApiProviderFactory()
+            self.register_factory(ProviderType.OPENWEBUI, openwebui_factory)
+        except ImportError:
+            pass  # WEbUI Platform API provider not available
 
         # Gemini OAuth provider (Gemini CLI subscription)
         try:

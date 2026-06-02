@@ -53,45 +53,35 @@ class OpenWebUIPlatformApiProvider(BaseLLMProvider):
         # Initialize OpenAI client
         try:
             timeout = self.timeout
-
+            import httpx
             # For local providers that don't need API keys, use a placeholder
             api_key = self.api_key or "not-needed"
-
+            verify = True
             # Handle TLS verification settings and create client
             if self.disable_tls:
-                import httpx
                 import ssl
                 log.log_warn(f"TLS verification disabled for OpenAI provider '{self.name}'")
-
                 # Create SSL context that doesn't verify certificates
                 ssl_context = ssl.create_default_context()
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
-
+                verify = False
                 # Create httpx client with disabled verification
-                http_client = httpx.Client(verify=False, timeout=timeout)
-
-                self._client = OpenAI(
-                    api_key=api_key,
-                    base_url=self.url,
-                    timeout=timeout,
-                    max_retries=0,  # We handle retries ourselves
-                    http_client=http_client
-                )
             else:
-                import httpx
                 # Respect bypass_proxy setting (default False: use system proxy)
                 _bypass_proxy = self.config.get('bypass_proxy', False)
-                _http_client = httpx.Client(trust_env=not _bypass_proxy, timeout=timeout)
+                verify = not _bypass_proxy
                 if _bypass_proxy:
                     log.log_debug("OpenAI: Bypassing system proxy (trust_env=False)")
-                self._client = OpenAI(
-                    api_key=api_key,
-                    base_url=self.url,
-                    timeout=timeout,
-                    max_retries=0,  # We handle retries ourselves
-                    http_client=_http_client
-                )
+
+            http_client = httpx.Client(verify=verify, timeout=timeout)
+            self._client = OpenAI(
+                api_key=api_key,
+                base_url=self.url +"/api",
+                timeout=timeout,
+                max_retries=0,  # We handle retries ourselves
+                http_client=http_client
+            )
 
         except Exception as e:
             raise APIProviderError(f"Failed to initialize OpenAI client: {e}")
@@ -737,5 +727,5 @@ class OpenWebUIPlatformApiProviderFactory(ProviderFactory):
         """Check if this factory supports the provider type"""
         # OpenAI like providers for special Open WebUI compat
         return provider_type in {
-            ProviderType.OPENWEBUI,
+            ProviderType.OPENWEBUI
         }
