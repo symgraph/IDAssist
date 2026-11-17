@@ -76,7 +76,21 @@ def execute_on_main_thread(callback):
         # Outside IDA, just call directly
         return callback()
 
-    return idaapi.execute_sync(callback, idaapi.MFF_FAST)
+    # Qt slots and action handlers already run on the UI thread. Queueing
+    # execute_sync from that thread can stall the request on some IDA builds.
+    try:
+        import ida_pro
+        if hasattr(ida_pro, "is_main_thread") and ida_pro.is_main_thread():
+            callback()
+            return 1
+    except Exception:
+        pass
+
+    def _wrapped():
+        callback()
+        return 1
+
+    return idaapi.execute_sync(_wrapped, idaapi.MFF_FAST)
 
 
 def get_user_data_dir():

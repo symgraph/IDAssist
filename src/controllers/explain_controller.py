@@ -188,10 +188,15 @@ class ExplainController:
         """Handle explain function request"""
         log.log_info("Explain function requested")
 
-        # Check if already running
+        # A previous run can leave the flag set when an early return forgets
+        # to clear it. Ignoring the next click then only switches tabs.
         if self.function_query_active:
-            log.log_warn("Function query already active, ignoring request")
-            return
+            log.log_warn("Function query already active; cancelling previous run")
+            try:
+                self.stop_function_query()
+            except Exception as e:
+                log.log_warn(f"Failed to stop previous function query: {e}")
+                self.function_query_active = False
 
         # Set query active state
         self._set_query_state("function", True)
@@ -227,7 +232,13 @@ class ExplainController:
                 node = self.graphrag_service.get_node_by_address(
                     binary_hash, "FUNCTION", int(function_start)
                 )
-                if node and node.llm_summary and not node.is_stale:
+                summary = (node.llm_summary if node else None) or ""
+                if (
+                    node
+                    and summary.strip()
+                    and not node.is_stale
+                    and not self._is_unusable_cached_response(summary)
+                ):
                     log.log_info("Using cached GraphRAG function analysis")
                     self._current_analysis_address = function_start
                     self._current_analysis_type = "explain_function"
@@ -240,7 +251,12 @@ class ExplainController:
                     binary_hash, function_start, "explain_function"
                 )
 
-                if cached_analysis and not self._should_refresh_cache(cached_analysis):
+                cached_response = (cached_analysis or {}).get("response") or ""
+                if (
+                    cached_analysis
+                    and not self._should_refresh_cache(cached_analysis)
+                    and not self._is_unusable_cached_response(cached_response)
+                ):
                     log.log_info("Using cached function analysis (legacy)")
                     self._current_analysis_address = function_start
                     self._current_analysis_type = "explain_function"
@@ -281,6 +297,7 @@ class ExplainController:
                 error_msg = f"Failed to get code: {code_data.get('error', 'Unknown error')}"
                 log.log_error(error_msg)
                 self.view.set_explanation_content(f"**Error**: {error_msg}")
+                self._set_query_state("function", False)
                 return
 
             # Check if RAG and MCP are enabled
@@ -294,6 +311,7 @@ class ExplainController:
                 explanation = self._format_function_explanation(context, code_data, include_llm_prompt=False)
                 self.view.set_explanation_content(explanation)
                 log.log_warn("No active LLM provider, showing static analysis")
+                self._set_query_state("function", False)
                 return
 
             # Generate LLM query
@@ -334,10 +352,13 @@ class ExplainController:
         """Handle explain line request with per-line caching"""
         log.log_info("Explain line requested")
 
-        # Check if already running
         if self.line_query_active:
-            log.log_warn("Line query already active, ignoring request")
-            return
+            log.log_warn("Line query already active; cancelling previous run")
+            try:
+                self.stop_line_query()
+            except Exception as e:
+                log.log_warn(f"Failed to stop previous line query: {e}")
+                self.line_query_active = False
 
         # Set query active state
         self._set_query_state("line", True)
@@ -370,7 +391,12 @@ class ExplainController:
                     binary_hash, current_offset, view_type
                 )
 
-                if cached_line and not self._should_refresh_cache(cached_line):
+                cached_line_text = (cached_line or {}).get("explanation") or ""
+                if (
+                    cached_line
+                    and not self._should_refresh_cache(cached_line)
+                    and not self._is_unusable_cached_response(cached_line_text)
+                ):
                     log.log_info(f"Using cached line explanation for 0x{current_offset:x} ({view_type})")
                     self._current_analysis_address = current_offset
                     self._current_analysis_type = "explain_line"
@@ -1430,6 +1456,25 @@ Analyze the specific instruction/line of code below. Provide a detailed explanat
         """Determine if cached analysis should be refreshed"""
         # For now, always use cache. Future: check timestamps, model versions, etc.
         return False
+
+    def _is_unusable_cached_response(self, response: str) -> bool:
+        """Skip cache hits that are empty, placeholders, or a previous error."""
+        text = (response or "").strip()
+        if not text:
+            return True
+        lowered = text.lower()
+        markers = (
+            "*preparing function analysis...*",
+            "*preparing line analysis...*",
+            "*generating ai explanation...*",
+            "*thinking...*",
+            "**error**:",
+            "**error:**",
+            "falling back to static analysis",
+            "no function found at current offset",
+            "failed to get code:",
+        )
+        return any(marker in lowered for marker in markers)
 
     def _save_tool_execution_to_db(self, tool_calls: List[ToolCall], results: List[ToolResult], analysis_type: str):
         """Save tool execution to database"""
