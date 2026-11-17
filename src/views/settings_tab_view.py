@@ -511,14 +511,24 @@ class SettingsTabView(QWidget):
 
     def _on_reasoning_effort_changed(self, text):
         """Handle reasoning effort combo change"""
+        if getattr(self, "_suppress_reasoning_effort_signal", False):
+            return
         current_data = self.reasoning_effort_combo.currentData()
-        if current_data:
+        # "none" is a valid saved value and must still be emitted.
+        if current_data is not None:
             self.reasoning_effort_changed.emit(current_data)
 
     def set_reasoning_effort(self, reasoning_effort: str):
         """Set the reasoning effort combo to the specified value"""
-        index = self.reasoning_effort_combo.findData(reasoning_effort)
+        index = self.reasoning_effort_combo.findData(reasoning_effort or "none")
         if index >= 0:
-            self.reasoning_effort_combo.currentTextChanged.disconnect(self._on_reasoning_effort_changed)
-            self.reasoning_effort_combo.setCurrentIndex(index)
-            self.reasoning_effort_combo.currentTextChanged.connect(self._on_reasoning_effort_changed)
+            self._suppress_reasoning_effort_signal = True
+            try:
+                self.reasoning_effort_combo.currentTextChanged.disconnect(self._on_reasoning_effort_changed)
+            except Exception:
+                pass
+            try:
+                self.reasoning_effort_combo.setCurrentIndex(index)
+            finally:
+                self.reasoning_effort_combo.currentTextChanged.connect(self._on_reasoning_effort_changed)
+                self._suppress_reasoning_effort_signal = False
